@@ -1,0 +1,21 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "peter-claude-plugins",
+  "version": "1.0.0",
+  "description": "Personal plugins for Claude Code / Claude Desktop Cowork",
+  "owner": {
+    "name": "Peter Kuo"
+  },
+  "plugins": [
+    {
+      "name": "devlog",
+      "description": "開發日誌記錄系統 — 透過引導式訪談記錄完成的開發專案，支援 OpenMemory 整合",
+      "version": "1.0.0",
+      "author": {
+        "name": "Peter Kuo"
+      },
+      "source": "./plugins/devlog",
+      "category": "productivity"
+    }
+  ]
+}
