@@ -1,7 +1,7 @@
 {
   "name": "devlog",
-  "description": "開發日誌記錄系統 — 透過引導式訪談記錄完成的開發專案，支援 OpenMemory 整合",
-  "version": "1.0.0",
+  "description": "開發日誌記錄系統 v2 — 引導式訪談 + 里程碑自動偵測 + OpenMemory 整合",
+  "version": "2.0.0",
   "author": {
     "name": "Peter Kuo"
   }
