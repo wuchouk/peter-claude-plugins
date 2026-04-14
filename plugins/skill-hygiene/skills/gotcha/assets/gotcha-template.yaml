@@ -1,0 +1,16 @@
+# Skill Gotchas Registry
+# 由 /gotcha 自動管理，也可手動編輯
+# 位置：~/.claude/skill-hygiene/gotchas.yaml
+
+gotchas: []
+
+# 每個 gotcha 格式：
+#
+# - id: "skill-name-2026-03-18-001"
+#   skill: "skill-name"
+#   date: "2026-03-18"
+#   category: "behavior|output|flow|missing|trigger"
+#   problem: "問題描述"
+#   expected: "預期行為"
+#   fix: "修正建議"
+#   status: "pending|applied|wont-fix"

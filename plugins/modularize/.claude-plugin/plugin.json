@@ -1,0 +1,8 @@
+{
+  "name": "modularize",
+  "description": "分析既有專案的模組化程度，產出重構建議報告，降低耦合提升協作效率",
+  "version": "1.0.0",
+  "author": {
+    "name": "Peter Kuo"
+  }
+}

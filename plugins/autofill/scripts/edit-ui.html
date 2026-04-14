@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Autofill — 個人資料編輯</title>
+<style>
+:root {
+  --bg: #ffffff; --bg2: #f5f5f7; --fg: #1d1d1f; --fg2: #6e6e73;
+  --border: #d2d2d7; --accent: #0071e3; --accent-hover: #0077ed;
+  --danger: #ff3b30; --success: #34c759;
+  --section-bg: #f9f9fb; --input-bg: #ffffff;
+  --radius: 8px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1c1e; --bg2: #2c2c2e; --fg: #f5f5f7; --fg2: #98989d;
+    --border: #48484a; --accent: #0a84ff; --accent-hover: #409cff;
+    --danger: #ff453a; --success: #30d158;
+    --section-bg: #2c2c2e; --input-bg: #3a3a3c;
+  }
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+  background: var(--bg); color: var(--fg); line-height: 1.5;
+  max-width: 800px; margin: 0 auto; padding: 24px 16px 80px;
+}
+h1 { font-size: 28px; font-weight: 700; margin-bottom: 8px; }
+.subtitle { color: var(--fg2); margin-bottom: 24px; font-size: 14px; }
+.section {
+  background: var(--section-bg); border: 1px solid var(--border);
+  border-radius: var(--radius); margin-bottom: 16px; overflow: hidden;
+}
+.section-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px; cursor: pointer; user-select: none;
+  font-weight: 600; font-size: 16px;
+}
+.section-header:hover { background: var(--bg2); }
+.section-header .arrow { transition: transform 0.2s; font-size: 12px; color: var(--fg2); }
+.section.collapsed .section-body { display: none; }
+.section.collapsed .arrow { transform: rotate(-90deg); }
+.section-body { padding: 0 16px 16px; }
+.field-row {
+  display: flex; align-items: center; gap: 12px; margin-top: 12px;
+}
+.field-row label {
+  flex: 0 0 160px; font-size: 13px; color: var(--fg2); text-align: right;
+}
+.field-row input, .field-row select {
+  flex: 1; padding: 8px 12px; border: 1px solid var(--border);
+  border-radius: 6px; font-size: 14px; background: var(--input-bg);
+  color: var(--fg); outline: none; transition: border-color 0.2s;
+}
+.field-row input:focus, .field-row select:focus { border-color: var(--accent); }
+.field-row input.invalid { border-color: var(--danger); }
+.array-group {
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 12px; margin-top: 12px; position: relative;
+  background: var(--bg);
+}
+.array-group-header {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 8px; font-size: 13px; font-weight: 600; color: var(--fg2);
+}
+.btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 6px 14px; border: none; border-radius: 6px;
+  font-size: 13px; cursor: pointer; transition: all 0.15s;
+}
+.btn-add { background: var(--accent); color: #fff; margin-top: 12px; }
+.btn-add:hover { background: var(--accent-hover); }
+.btn-remove { background: var(--danger); color: #fff; padding: 4px 10px; font-size: 12px; }
+.btn-remove:hover { opacity: 0.85; }
+.btn-save {
+  position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+  background: var(--accent); color: #fff; padding: 12px 48px;
+  font-size: 16px; font-weight: 600; border-radius: 12px;
+  box-shadow: 0 4px 12px rgba(0,113,227,0.3); z-index: 100;
+}
+.btn-save:hover { background: var(--accent-hover); }
+.btn-save:disabled { opacity: 0.5; cursor: not-allowed; }
+.toast {
+  position: fixed; top: 24px; left: 50%; transform: translateX(-50%);
+  padding: 12px 24px; border-radius: 8px; font-size: 14px; font-weight: 500;
+  z-index: 200; opacity: 0; transition: opacity 0.3s; pointer-events: none;
+}
+.toast.show { opacity: 1; }
+.toast.success { background: var(--success); color: #fff; }
+.toast.error { background: var(--danger); color: #fff; }
+@media (max-width: 600px) {
+  .field-row { flex-wrap: wrap; }
+  .field-row label { flex: 1 0 100%; text-align: left; }
+}
+</style>
+</head>
+<body>
+
+<h1>Autofill 個人資料</h1>
+<p class="subtitle">所有資料僅在你的本機處理，不會經過任何外部服務。填完後按底部「儲存並加密」。</p>
+
+<div id="app"></div>
+
+<div id="toast" class="toast"></div>
+<button class="btn btn-save" id="saveBtn">儲存並加密</button>
+
+<script>
+let schema = {};
+let formData = {};
+
+// HTML escape to prevent XSS when inserting user data into DOM
+function esc(str) {
+  if (str == null) return '';
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+// DOM helper: create element with attributes and children
+function el(tag, attrs, ...children) {
+  const e = document.createElement(tag);
+  if (attrs) {
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k.startsWith('on') && typeof v === 'function') {
+        e.addEventListener(k.slice(2), v);
+      } else if (k === 'className') {
+        e.className = v;
+      } else {
+        e.setAttribute(k, v);
+      }
+    }
+  }
+  for (const c of children) {
+    if (typeof c === 'string') e.appendChild(document.createTextNode(c));
+    else if (c) e.appendChild(c);
+  }
+  return e;
+}
+
+async function init() {
+  const [schemaRes, dataRes] = await Promise.all([
+    fetch('/api/schema').then(r => r.json()),
+    fetch('/api/data').then(r => r.json())
+  ]);
+  schema = schemaRes;
+  formData = dataRes;
+  document.getElementById('saveBtn').addEventListener('click', saveData);
+  render();
+}
+
+function render() {
+  const app = document.getElementById('app');
+  app.textContent = '';
+
+  const sections = [
+    { key: 'identity', title: '身分 Identity', icon: '\u{1F464}' },
+    { key: 'id_documents', title: '證件 ID Documents', icon: '\u{1FAAA}' },
+    { key: 'phones', title: '電話 Phones', icon: '\u{1F4F1}', array: true },
+    { key: 'emails', title: 'Email', icon: '\u{1F4E7}', array: true },
+    { key: 'addresses', title: '地址 Addresses', icon: '\u{1F3E0}' },
+    { key: 'contact', title: '緊急聯絡人 Emergency Contact', icon: '\u{1F198}' },
+    { key: 'employment', title: '工作 Employment', icon: '\u{1F4BC}' },
+    { key: 'education', title: '學歷 Education', icon: '\u{1F393}', array: true },
+    { key: 'marriage', title: '婚姻 Marriage', icon: '\u{1F48D}' },
+    { key: 'income', title: '收入 Income', icon: '\u{1F4B0}' },
+    { key: 'visa_history', title: '簽證歷史 Visa History', icon: '\u{2708}\u{FE0F}', array: true },
+  ];
+
+  for (const sec of sections) {
+    const div = el('div', {className: 'section'});
+    const header = el('div', {className: 'section-header', onclick: () => div.classList.toggle('collapsed')},
+      el('span', null, sec.icon + ' ' + sec.title),
+      el('span', {className: 'arrow'}, '\u25BC')
+    );
+    const body = el('div', {className: 'section-body'});
+    body.id = 'sec-' + sec.key;
+    div.appendChild(header);
+    div.appendChild(body);
+    app.appendChild(div);
+
+    if (sec.array && Array.isArray(formData[sec.key])) {
+      renderTopLevelArray(body, sec.key);
+    } else if (sec.key === 'addresses') {
+      renderAddresses(body);
+    } else if (sec.key === 'id_documents') {
+      renderIdDocuments(body);
+    } else if (sec.key === 'employment') {
+      renderEmployment(body);
+    } else if (typeof formData[sec.key] === 'object' && formData[sec.key] !== null) {
+      renderFields(body, formData[sec.key], schema[sec.key] || {}, sec.key);
+    }
+  }
+}
+
+// Dropdown options for specific fields
+const SELECT_OPTIONS = {
+  'label:phones': [
+    ['taiwan_mobile', '台灣手機 taiwan_mobile'],
+    ['us_mobile', '美國手機 us_mobile'],
+    ['work', '公司 work'],
+    ['home', '家用 home'],
+    ['other', '其他 other'],
+  ],
+  'country_code': [
+    ['+886', '+886 台灣'],
+    ['+1', '+1 美國/加拿大'],
+    ['+81', '+81 日本'],
+    ['+82', '+82 韓國'],
+    ['+44', '+44 英國'],
+    ['+49', '+49 德國'],
+    ['+61', '+61 澳洲'],
+    ['+86', '+86 中國'],
+  ],
+  'label:emails': [
+    ['personal', '個人 personal'],
+    ['work', '公司 work'],
+    ['other', '其他 other'],
+  ],
+  'gender': [
+    ['', '— 選擇 —'],
+    ['M', 'M 男'],
+    ['F', 'F 女'],
+  ],
+  'status:marriage': [
+    ['', '— 選擇 —'],
+    ['Single', 'Single 未婚'],
+    ['Married', 'Married 已婚'],
+    ['Divorced', 'Divorced 離婚'],
+    ['Widowed', 'Widowed 喪偶'],
+  ],
+  'degree': [
+    ['', '— 選擇 —'],
+    ['Bachelor', 'Bachelor 學士'],
+    ['Master', 'Master 碩士'],
+    ['PhD', 'PhD 博士'],
+  ],
+  'status:visa_history': [
+    ['', '— 選擇 —'],
+    ['Approved', 'Approved 核准'],
+    ['Denied', 'Denied 拒絕'],
+    ['Expired', 'Expired 過期'],
+  ],
+};
+
+function getSelectOptions(key, path) {
+  // Check context-specific keys first (e.g., label in phones vs emails)
+  if (key === 'label') {
+    if (path.startsWith('phones')) return SELECT_OPTIONS['label:phones'];
+    if (path.startsWith('emails')) return SELECT_OPTIONS['label:emails'];
+  }
+  if (key === 'status') {
+    if (path.startsWith('marriage')) return SELECT_OPTIONS['status:marriage'];
+    if (path.startsWith('visa_history')) return SELECT_OPTIONS['status:visa_history'];
+  }
+  return SELECT_OPTIONS[key] || null;
+}
+
+function createFieldRow(labelText, value, fullPath, key) {
+  const row = el('div', {className: 'field-row'});
+  const lbl = el('label', {title: fullPath}, labelText);
+
+  // Check if this field should be a dropdown
+  const options = getSelectOptions(key, fullPath);
+  if (options) {
+    const sel = el('select', {
+      'data-path': fullPath,
+      onchange: function() { updateValue(this); render(); }
+    });
+    // If current value isn't in options, add it as first option
+    const optValues = options.map(o => o[0]);
+    if (value && !optValues.includes(value)) {
+      const customOpt = el('option', {value: value}, value);
+      customOpt.selected = true;
+      sel.appendChild(customOpt);
+    }
+    for (const [v, t] of options) {
+      const opt = el('option', {value: v}, t);
+      if (value === v) opt.selected = true;
+      sel.appendChild(opt);
+    }
+    row.appendChild(lbl);
+    row.appendChild(sel);
+  } else {
+    const input = el('input', {
+      type: 'text',
+      value: value || '',
+      'data-path': fullPath,
+      placeholder: getPlaceholder(key),
+      onchange: function() { updateValue(this); },
+      oninput: function() { validateField(this); }
+    });
+    const pat = getPatternValue(key);
+    if (pat) input.setAttribute('pattern', pat);
+    row.appendChild(lbl);
+    row.appendChild(input);
+  }
+  return row;
+}
+
+// Short labels for fields that use dropdowns (schema descriptions are redundant)
+const SHORT_LABELS = {
+  label: '標籤',
+  country_code: '國碼',
+  gender: '性別',
+  degree: '學位',
+};
+
+function renderFields(container, data, desc, path) {
+  if (!data || typeof data !== 'object') return;
+  for (const [key, val] of Object.entries(data)) {
+    if (typeof val === 'object' && val !== null) continue;
+    const fullPath = path + '.' + key;
+    const hasDropdown = !!getSelectOptions(key, fullPath);
+    const label = hasDropdown
+      ? (SHORT_LABELS[key] || key)
+      : ((desc && typeof desc === 'object') ? (desc[key] || key) : key);
+    container.appendChild(createFieldRow(label, val, fullPath, key));
+  }
+}
+
+function renderTopLevelArray(container, key) {
+  const arr = formData[key];
+  const schemaArr = schema[key];
+  const schemaItem = Array.isArray(schemaArr) && schemaArr.length > 0 ? schemaArr[0] : {};
+
+  arr.forEach((item, idx) => {
+    const group = el('div', {className: 'array-group'});
+    const labelVal = item.label || item.country || '#' + (idx + 1);
+    const headerDiv = el('div', {className: 'array-group-header'},
+      el('span', null, labelVal),
+      el('button', {className: 'btn btn-remove', onclick: () => { removeArrayItem(key, idx); }}, '刪除')
+    );
+    group.appendChild(headerDiv);
+    renderFields(group, item, schemaItem, key + '[' + idx + ']');
+    container.appendChild(group);
+  });
+
+  const addBtn = el('button', {className: 'btn btn-add', onclick: () => addArrayItem(key)}, '+ 新增');
+  container.appendChild(addBtn);
+}
+
+function renderIdDocuments(container) {
+  const data = formData.id_documents;
+  const desc = schema.id_documents || {};
+
+  for (const key of ['tw_national_id', 'us_ssn']) {
+    if (key in data) {
+      container.appendChild(createFieldRow(desc[key] || key, data[key], 'id_documents.' + key, key));
+    }
+  }
+
+  if (data.us_drivers_license) {
+    const dlGroup = el('div', {className: 'array-group'});
+    dlGroup.appendChild(el('div', {className: 'array-group-header'}, el('span', null, '美國駕照')));
+    const dlDesc = (desc.us_drivers_license && typeof desc.us_drivers_license === 'object') ? desc.us_drivers_license : {};
+    renderFields(dlGroup, data.us_drivers_license, dlDesc, 'id_documents.us_drivers_license');
+    container.appendChild(dlGroup);
+  }
+
+  if (Array.isArray(data.passports)) {
+    const ppDesc = Array.isArray(desc.passports) && desc.passports.length > 0 ? desc.passports[0] : {};
+    data.passports.forEach((pp, idx) => {
+      const group = el('div', {className: 'array-group'});
+      const title = '護照 ' + (pp.country || '#' + (idx + 1));
+      group.appendChild(el('div', {className: 'array-group-header'},
+        el('span', null, title),
+        el('button', {className: 'btn btn-remove', onclick: () => removeArrayItem('id_documents.passports', idx)}, '刪除')
+      ));
+      renderFields(group, pp, ppDesc, 'id_documents.passports[' + idx + ']');
+      container.appendChild(group);
+    });
+
+    container.appendChild(el('button', {className: 'btn btn-add', onclick: () => addArrayItem('id_documents.passports')}, '+ 新增護照'));
+  }
+}
+
+function renderAddresses(container) {
+  const data = formData.addresses;
+  const desc = schema.addresses || {};
+
+  if (data.current) {
+    const group = el('div', {className: 'array-group'});
+    group.appendChild(el('div', {className: 'array-group-header'}, el('span', null, '目前地址')));
+    renderAddressFields(group, data.current, desc.current || {}, 'addresses.current');
+    container.appendChild(group);
+  }
+
+  if (Array.isArray(data.history)) {
+    const histDesc = Array.isArray(desc.history) && desc.history.length > 0 ? desc.history[0] : {};
+    data.history.forEach((addr, idx) => {
+      const group = el('div', {className: 'array-group'});
+      group.appendChild(el('div', {className: 'array-group-header'},
+        el('span', null, '歷史地址 #' + (idx + 1)),
+        el('button', {className: 'btn btn-remove', onclick: () => removeArrayItem('addresses.history', idx)}, '刪除')
+      ));
+      renderAddressFields(group, addr, histDesc, 'addresses.history[' + idx + ']');
+      container.appendChild(group);
+    });
+
+    container.appendChild(el('button', {className: 'btn btn-add', onclick: () => addArrayItem('addresses.history')}, '+ 新增歷史地址'));
+  }
+}
+
+function renderAddressFields(container, data, desc, path) {
+  // Format selector
+  const formatRow = el('div', {className: 'field-row'});
+  formatRow.appendChild(el('label', null, '地址格式'));
+  const sel = el('select', {'data-path': path + '.format', onchange: function() { updateValue(this); render(); }});
+  const opts = [['', '— 選擇 —'], ['US', 'US 美國地址'], ['TW', 'TW 台灣中文地址'], ['TW_EN', 'TW 台灣英文地址']];
+  for (const [v, t] of opts) {
+    const opt = el('option', {value: v}, t);
+    if (data.format === v || (!data.format && v === '')) opt.selected = true;
+    sel.appendChild(opt);
+  }
+  formatRow.appendChild(sel);
+  container.appendChild(formatRow);
+
+  const fmt = data.format || '';
+
+  // US fields
+  if (fmt === 'US') {
+    for (const k of ['street_line1', 'street_line2', 'city', 'state', 'zip', 'country']) {
+      if (k in data) container.appendChild(createFieldRow(desc[k] || k, data[k], path + '.' + k, k));
+    }
+  }
+
+  // TW 中文 fields
+  if (fmt === 'TW') {
+    for (const k of ['city_zh', 'district_zh', 'road_zh', 'section_zh', 'lane_zh', 'alley_zh', 'number_zh', 'floor_zh', 'room_zh', 'postal_code']) {
+      if (k in data) container.appendChild(createFieldRow(desc[k] || k, data[k], path + '.' + k, k));
+    }
+  }
+
+  // TW English fields (reuse street-style fields for English Taiwan addresses)
+  if (fmt === 'TW_EN') {
+    for (const k of ['street_line1', 'street_line2', 'city', 'postal_code', 'country']) {
+      if (k in data) container.appendChild(createFieldRow(desc[k] || k, data[k], path + '.' + k, k));
+    }
+  }
+
+  // Common fields — full address + dates
+  for (const k of ['full_zh', 'full_en', 'from_date', 'to_date']) {
+    if (k in data) container.appendChild(createFieldRow(desc[k] || k, data[k], path + '.' + k, k));
+  }
+}
+
+function renderEmployment(container) {
+  const data = formData.employment;
+  const desc = schema.employment || {};
+
+  if (data.current) {
+    const group = el('div', {className: 'array-group'});
+    group.appendChild(el('div', {className: 'array-group-header'}, el('span', null, '目前工作')));
+    renderFields(group, data.current, desc.current || {}, 'employment.current');
+    container.appendChild(group);
+  }
+
+  if (Array.isArray(data.history)) {
+    const histDesc = Array.isArray(desc.history) && desc.history.length > 0 ? desc.history[0] : {};
+    data.history.forEach((job, idx) => {
+      const group = el('div', {className: 'array-group'});
+      group.appendChild(el('div', {className: 'array-group-header'},
+        el('span', null, '工作歷史 #' + (idx + 1)),
+        el('button', {className: 'btn btn-remove', onclick: () => removeArrayItem('employment.history', idx)}, '刪除')
+      ));
+      renderFields(group, job, histDesc, 'employment.history[' + idx + ']');
+      container.appendChild(group);
+    });
+
+    container.appendChild(el('button', {className: 'btn btn-add', onclick: () => addArrayItem('employment.history')}, '+ 新增工作歷史'));
+  }
+}
+
+// ── Data helpers ──
+
+function getByPath(obj, path) {
+  const parts = path.replace(/\[(\d+)\]/g, '.$1').split('.');
+  let cur = obj;
+  for (const p of parts) {
+    if (cur == null) return undefined;
+    cur = /^\d+$/.test(p) ? cur[parseInt(p)] : cur[p];
+  }
+  return cur;
+}
+
+function setByPath(obj, path, value) {
+  const parts = path.replace(/\[(\d+)\]/g, '.$1').split('.');
+  let cur = obj;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const p = parts[i];
+    const next = parts[i + 1];
+    const key = /^\d+$/.test(p) ? parseInt(p) : p;
+    if (cur[key] == null) {
+      cur[key] = /^\d+$/.test(next) ? [] : {};
+    }
+    cur = cur[key];
+  }
+  const last = parts[parts.length - 1];
+  cur[/^\d+$/.test(last) ? parseInt(last) : last] = value;
+}
+
+function updateValue(elem) {
+  const path = elem.dataset.path || elem.getAttribute('data-path');
+  setByPath(formData, path, elem.value);
+}
+
+function removeArrayItem(path, idx) {
+  const arr = getByPath(formData, path);
+  if (Array.isArray(arr)) {
+    arr.splice(idx, 1);
+    render();
+  }
+}
+
+function addArrayItem(path) {
+  const arr = getByPath(formData, path);
+  if (!Array.isArray(arr)) return;
+
+  const schemaArr = getByPath(schema, path);
+  let template = {};
+  if (Array.isArray(schemaArr) && schemaArr.length > 0) {
+    for (const k of Object.keys(schemaArr[0])) {
+      template[k] = '';
+    }
+  } else if (arr.length > 0) {
+    for (const k of Object.keys(arr[0])) {
+      template[k] = typeof arr[0][k] === 'object' ? JSON.parse(JSON.stringify(arr[0][k])) : '';
+    }
+  }
+  arr.push(template);
+  render();
+}
+
+// ── Validation ──
+
+function getPlaceholder(key) {
+  const map = {
+    tw_national_id: 'A123456789', us_ssn: '123-45-6789',
+    zip: '12345', postal_code: '100',
+    birth_date: 'YYYY-MM-DD', from_date: 'YYYY-MM-DD', to_date: 'YYYY-MM-DD',
+    issue_date: 'YYYY-MM-DD', expiry_date: 'YYYY-MM-DD',
+    marriage_date: 'YYYY-MM-DD', spouse_birth_date: 'YYYY-MM-DD',
+    gender: 'M 或 F', country_code: '+886', number: '0912345678',
+  };
+  return map[key] || '';
+}
+
+function getPatternValue(key) {
+  const patterns = {
+    tw_national_id: '[A-Z]\\d{9}',
+    us_ssn: '\\d{3}-\\d{2}-\\d{4}',
+    zip: '\\d{5}(-\\d{4})?',
+  };
+  return patterns[key] || null;
+}
+
+function validateField(elem) {
+  const pat = elem.getAttribute('pattern');
+  if (pat && elem.value && !new RegExp('^' + pat + '$').test(elem.value)) {
+    elem.classList.add('invalid');
+  } else {
+    elem.classList.remove('invalid');
+  }
+}
+
+// ── Save ──
+
+async function saveData() {
+  const btn = document.getElementById('saveBtn');
+  btn.disabled = true;
+  btn.textContent = '儲存中...';
+
+  try {
+    const res = await fetch('/api/data', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(formData)
+    });
+    const result = await res.json();
+    if (result.status === 'ok') {
+      showToast('\u2705 ' + result.message, 'success');
+      setTimeout(() => {
+        const app = document.getElementById('app');
+        app.textContent = '';
+        const wrapper = el('div', {style: 'display:flex;flex-direction:column;align-items:center;justify-content:center;height:80vh;text-align:center;'});
+        wrapper.appendChild(el('div', {style: 'font-size:48px;margin-bottom:16px;'}, '\u2705'));
+        wrapper.appendChild(el('h2', null, '資料已加密儲存'));
+        wrapper.appendChild(el('p', {style: 'color:var(--fg2);margin-top:8px;'}, '你可以關閉這個頁面了。'));
+        document.body.textContent = '';
+        document.body.appendChild(wrapper);
+      }, 1500);
+    } else {
+      showToast('\u274C ' + result.message, 'error');
+      btn.disabled = false;
+      btn.textContent = '儲存並加密';
+    }
+  } catch (e) {
+    showToast('\u274C 連線失敗: ' + e.message, 'error');
+    btn.disabled = false;
+    btn.textContent = '儲存並加密';
+  }
+}
+
+function showToast(msg, type) {
+  const toast = document.getElementById('toast');
+  toast.textContent = msg;
+  toast.className = 'toast ' + type + ' show';
+  setTimeout(() => toast.classList.remove('show'), 3000);
+}
+
+// ── Init ──
+init();
+</script>
+</body>
+</html>

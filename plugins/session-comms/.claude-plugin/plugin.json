@@ -1,0 +1,8 @@
+{
+  "name": "session-comms",
+  "version": "0.1.0",
+  "description": "多 session 溝通協議 — 讓平行開發的 Claude Code sessions（git worktree）透過 file-based inbox 非同步交換訊息",
+  "author": {
+    "name": "Peter Kuo"
+  }
+}

@@ -1,0 +1,162 @@
+# ============================================================
+# Autofill 個人資料模板 v2
+# ============================================================
+# 請填入你的個人資訊，填完後執行 /autofill setup 加密
+# ⚠️  此檔案填完後會被加密，明文版會被安全刪除
+# ⚠️  請勿將此檔案提交至 git 或分享給他人
+# ============================================================
+
+identity:
+  last_name_zh: ""
+  first_name_zh: ""
+  last_name_en: ""
+  first_name_en: ""
+  middle_name_en: ""
+  birth_date: ""                # YYYY-MM-DD
+  birth_place_zh: ""
+  birth_place_en: ""
+  birth_country: ""
+  gender: ""                    # M 或 F
+  nationality: ""
+  nationality_zh: ""
+
+id_documents:
+  tw_national_id: ""            # 台灣身分證字號，例如 A123456789
+  us_ssn: ""                    # 美國社會安全碼，例如 123-45-6789
+  us_drivers_license:
+    number: ""
+    state: ""
+    issue_date: ""              # YYYY-MM-DD
+    expiry_date: ""             # YYYY-MM-DD
+    class: ""
+  # 護照（支援多本）
+  passports:
+    - country: ""
+      number: ""
+      issue_date: ""            # YYYY-MM-DD
+      expiry_date: ""           # YYYY-MM-DD
+      issue_place: ""
+
+phones:
+  - label: "taiwan_mobile"      # taiwan_mobile / us_mobile / work / home / ...
+    country_code: "+886"
+    number: ""                  # 本地格式，例如 0912345678
+  - label: "us_mobile"
+    country_code: "+1"
+    number: ""
+
+emails:
+  - label: "personal"           # personal / work / ...
+    address: ""
+  - label: "work"
+    address: ""
+
+addresses:
+  # 目前地址
+  current:
+    format: ""                  # US 或 TW
+    # --- US 格式 ---
+    street_line1: ""
+    street_line2: ""
+    city: ""
+    state: ""
+    zip: ""
+    country: ""
+    # --- TW 格式 ---
+    city_zh: ""
+    district_zh: ""
+    road_zh: ""
+    section_zh: ""
+    lane_zh: ""
+    alley_zh: ""
+    number_zh: ""
+    floor_zh: ""
+    room_zh: ""
+    postal_code: ""
+    # --- 便利全地址欄位（可選填，供一般文字欄位直接使用）---
+    full_zh: ""
+    full_en: ""
+    from_date: ""               # YYYY-MM-DD
+
+  # 歷史地址（可複製多筆）
+  history:
+    - format: ""                # US 或 TW
+      street_line1: ""
+      street_line2: ""
+      city: ""
+      state: ""
+      zip: ""
+      country: ""
+      city_zh: ""
+      district_zh: ""
+      road_zh: ""
+      section_zh: ""
+      lane_zh: ""
+      alley_zh: ""
+      number_zh: ""
+      floor_zh: ""
+      room_zh: ""
+      postal_code: ""
+      full_zh: ""
+      full_en: ""
+      from_date: ""             # YYYY-MM-DD
+      to_date: ""               # YYYY-MM-DD
+
+contact:
+  emergency_name: ""
+  emergency_phone: ""
+  emergency_relationship: ""
+
+employment:
+  current:
+    company_zh: ""
+    company_en: ""
+    title_zh: ""
+    title_en: ""
+    phone: ""
+    address_zh: ""
+    address_en: ""
+    from_date: ""               # YYYY-MM-DD
+
+  # 工作歷史（可複製多筆）
+  history:
+    - company_zh: ""
+      company_en: ""
+      title_zh: ""
+      title_en: ""
+      from_date: ""             # YYYY-MM-DD
+      to_date: ""               # YYYY-MM-DD
+
+# 學歷（可複製多筆）
+education:
+  - school_zh: ""
+    school_en: ""
+    degree: ""                  # Bachelor / Master / PhD
+    major_zh: ""
+    major_en: ""
+    from_date: ""               # YYYY-MM-DD
+    to_date: ""                 # YYYY-MM-DD
+
+marriage:
+  status: ""                    # Single / Married / Divorced / Widowed
+  spouse_name_zh: ""
+  spouse_name_en: ""
+  spouse_birth_date: ""         # YYYY-MM-DD
+  spouse_nationality: ""
+  marriage_date: ""             # YYYY-MM-DD
+
+income:
+  annual_amount: ""
+  currency: ""                  # TWD / USD / etc
+
+# 簽證歷史（可複製多筆）
+visa_history:
+  - country: ""
+    type: ""
+    number: ""
+    issue_date: ""              # YYYY-MM-DD
+    expiry_date: ""             # YYYY-MM-DD
+    status: ""                  # Approved / Denied / Expired
+
+# 自定義欄位（依需求新增）
+custom: {}

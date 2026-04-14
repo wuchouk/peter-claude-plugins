@@ -1,0 +1,8 @@
+{
+  "name": "autofill",
+  "description": "加密個資自動填表 — 安全地自動填寫 Web/PDF/Excel/Word 表單，個人資料永遠不經過 Claude API",
+  "version": "2.0.0",
+  "author": {
+    "name": "Peter Kuo"
+  }
+}

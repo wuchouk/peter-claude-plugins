@@ -2,10 +2,13 @@
 description: >
   This skill should be used when the user says "記錄開發日誌", "寫 devlog",
   "專案做完了", "record what we built", "log this project", "update devlog",
-  or when a development milestone is reached (feature complete, bug fixed,
-  deployment done). Also trigger when conversation indicates significant
-  development work has been completed. Do NOT trigger for minor changes,
-  typo fixes, or exploratory research.
+  or casual phrases like "記錄一下", "紀錄一下", "來記錄", "該記錄了" when
+  the conversation context involves completed development work.
+  Also trigger when a development milestone is reached (feature complete,
+  bug fixed, deployment done) and the user mentions recording/logging in
+  any form. When the user says "記錄" or "紀錄" after a development session,
+  assume they mean devlog unless context clearly indicates otherwise.
+  Do NOT trigger for minor changes, typo fixes, or exploratory research.
 allowed-tools: AskUserQuestion, Write, Read, Edit, Glob, Bash(date:*), Bash(mkdir:*), mcp__openmemory__add_memories, mcp__openmemory__search_memory
 ---
 

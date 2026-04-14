@@ -1,0 +1,22 @@
+# 專案特定驗證積木 — {PROJECT_NAME}
+# 由 /capture-test 自動生成，可手動編輯擴充
+# 生成日期：{DATE}
+
+project: {PROJECT_NAME}
+
+# 如果專案有 HTTP endpoint，填入 base URL
+# webapp_url: https://script.google.com/macros/s/.../exec
+
+primitives:
+  # --- 以下為根據專案特徵自動選入的積木 ---
+  # 每個 primitive 格式：
+  #
+  # - id: primitive-id
+  #   category: 分類名
+  #   description: 一句話描述
+  #   command: '執行指令（可用 ${WEBAPP_URL} 等變數）'
+  #   tool: 或指定 MCP tool name（與 command 二選一）
+  #   params: [param1, param2, ...]
+  #   notes: 補充說明
+
+  # --- 請在下方新增專案特定積木 ---

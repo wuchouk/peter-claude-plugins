@@ -16,6 +16,96 @@
       },
       "source": "./plugins/devlog",
       "category": "productivity"
+    },
+    {
+      "name": "test-email-processor",
+      "description": "Email processor automated testing — doGet HTTP trigger + Gmail MCP + claude-in-chrome verification",
+      "version": "1.0.0",
+      "author": {
+        "name": "Peter Kuo"
+      },
+      "source": "./plugins/test-email-processor",
+      "category": "testing"
+    },
+    {
+      "name": "idea-capture",
+      "description": "跨專案的 idea 快速記錄工具",
+      "version": "1.0.0",
+      "author": {
+        "name": "Peter Kuo"
+      },
+      "source": "./plugins/idea-capture",
+      "category": "productivity"
+    },
+    {
+      "name": "capture-test",
+      "description": "通用測試情境建構工具 — 引導式訪談 + 驗證積木 + 測試日誌 + 整併優化",
+      "version": "1.0.0",
+      "author": {
+        "name": "Peter Kuo"
+      },
+      "source": "./plugins/capture-test",
+      "category": "testing"
+    },
+    {
+      "name": "skill-hygiene",
+      "description": "Skill 維護工具 — gotchas 累積 + usage tracking + 使用量報告",
+      "version": "1.0.0",
+      "author": {
+        "name": "Peter Kuo"
+      },
+      "source": "./plugins/skill-hygiene",
+      "category": "productivity"
+    },
+    {
+      "name": "autofill",
+      "description": "加密個資自動填表 — 安全地自動填寫 Web/PDF/Excel/Word 表單，個人資料永遠不經過 Claude API",
+      "version": "1.0.0",
+      "author": {
+        "name": "Peter Kuo"
+      },
+      "source": "./plugins/autofill",
+      "category": "productivity"
+    },
+    {
+      "name": "modularize",
+      "description": "分析既有專案的模組化程度，產出重構建議報告，降低耦合提升協作效率",
+      "version": "1.0.0",
+      "author": {
+        "name": "Peter Kuo"
+      },
+      "source": "./plugins/modularize",
+      "category": "productivity"
+    },
+    {
+      "name": "scope-guard",
+      "description": "開發過程中的 scope guardian — 防止 scope creep，補齊規格缺口，管理 TODO 優先級",
+      "version": "1.1.0",
+      "author": {
+        "name": "Peter Kuo"
+      },
+      "source": "./plugins/scope-guard",
+      "category": "productivity"
+    },
+    {
+      "name": "justin-giveaway",
+      "description": "JUSTIN投資日記 weekly giveaway 自動化 — YouTube 留言 + X 分享 + Google Form 截圖上傳，可排程",
+      "version": "0.1.0",
+      "author": {
+        "name": "Peter Kuo"
+      },
+      "source": "./plugins/justin-giveaway",
+      "category": "automation"
+    },
+    {
+      "name": "session-comms",
+      "description": "多 session 溝通協議 — 讓平行開發的 Claude Code sessions（git worktree）透過 file-based inbox 非同步交換訊息",
+      "version": "0.1.0",
+      "author": {
+        "name": "Peter Kuo"
+      },
+      "source": "./plugins/session-comms",
+      "category": "productivity"
     }
   ]
 }

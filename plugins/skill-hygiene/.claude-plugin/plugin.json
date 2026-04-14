@@ -1,0 +1,8 @@
+{
+  "name": "skill-hygiene",
+  "version": "1.0.0",
+  "description": "Skill 維護工具 — gotchas 累積 + usage tracking + 使用量報告",
+  "author": {
+    "name": "Peter Kuo"
+  }
+}

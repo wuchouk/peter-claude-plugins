@@ -1,0 +1,141 @@
+# Autofill Data Schema v2 — 只有 key 結構定義，不含任何實際值
+# Claude 用這個檔案來了解可用的資料欄位，建立表單映射
+# full_name 已移除 — 改用 keys+join 合成（見 mapping-format.md）
+
+identity:
+  last_name_zh: "中文姓"
+  first_name_zh: "中文名"
+  last_name_en: "英文姓（護照拼寫）"
+  first_name_en: "英文名（護照拼寫）"
+  middle_name_en: "英文中間名"
+  birth_date: "出生日期 (YYYY-MM-DD)"
+  birth_place_zh: "出生地（中文）"
+  birth_place_en: "出生地（英文）"
+  birth_country: "出生國家（英文）"
+  gender: "性別 (M/F)"
+  nationality: "國籍（英文）"
+  nationality_zh: "國籍（中文）"
+
+id_documents:
+  tw_national_id: "台灣身分證字號"
+  us_ssn: "美國社會安全碼 (SSN)"
+  us_drivers_license:
+    number: "美國駕照號碼"
+    state: "核發州"
+    issue_date: "核發日期 (YYYY-MM-DD)"
+    expiry_date: "到期日期 (YYYY-MM-DD)"
+    class: "駕照等級"
+  passports:
+    - country: "護照國家"
+      number: "護照號碼"
+      issue_date: "護照核發日期 (YYYY-MM-DD)"
+      expiry_date: "護照到期日期 (YYYY-MM-DD)"
+      issue_place: "護照核發地點"
+
+phones:
+  - label: "標籤 (taiwan_mobile/us_mobile/work/home)"
+    country_code: "國碼 (+886/+1/...)"
+    number: "電話號碼（本地格式）"
+
+emails:
+  - label: "標籤 (personal/work)"
+    address: "Email 地址"
+
+addresses:
+  current:
+    format: "地址格式 (US/TW)"
+    street_line1: "街道地址第一行"
+    street_line2: "街道地址第二行（apt/suite）"
+    city: "城市（英文）"
+    state: "州"
+    zip: "郵遞區號"
+    country: "國家"
+    city_zh: "城市（中文）"
+    district_zh: "區"
+    road_zh: "路/街"
+    section_zh: "段"
+    lane_zh: "巷"
+    alley_zh: "弄"
+    number_zh: "號"
+    floor_zh: "樓"
+    room_zh: "室"
+    postal_code: "郵遞區號（台灣）"
+    full_zh: "完整中文地址"
+    full_en: "完整英文地址"
+    from_date: "起始日期 (YYYY-MM-DD)"
+  history:
+    - format: "地址格式 (US/TW)"
+      street_line1: "街道地址第一行"
+      street_line2: "街道地址第二行"
+      city: "城市（英文）"
+      state: "州"
+      zip: "郵遞區號"
+      country: "國家"
+      city_zh: "城市（中文）"
+      district_zh: "區"
+      road_zh: "路/街"
+      section_zh: "段"
+      lane_zh: "巷"
+      alley_zh: "弄"
+      number_zh: "號"
+      floor_zh: "樓"
+      room_zh: "室"
+      postal_code: "郵遞區號（台灣）"
+      full_zh: "完整中文地址"
+      full_en: "完整英文地址"
+      from_date: "起始日期 (YYYY-MM-DD)"
+      to_date: "結束日期 (YYYY-MM-DD)"
+
+contact:
+  emergency_name: "緊急聯絡人姓名"
+  emergency_phone: "緊急聯絡人電話"
+  emergency_relationship: "緊急聯絡人關係"
+
+employment:
+  current:
+    company_zh: "公司名稱（中文）"
+    company_en: "公司名稱（英文）"
+    title_zh: "職稱（中文）"
+    title_en: "職稱（英文）"
+    phone: "公司電話"
+    address_zh: "公司地址（中文）"
+    address_en: "公司地址（英文）"
+    from_date: "到職日期 (YYYY-MM-DD)"
+  history:
+    - company_zh: "公司名稱（中文）"
+      company_en: "公司名稱（英文）"
+      title_zh: "職稱（中文）"
+      title_en: "職稱（英文）"
+      from_date: "起始日期 (YYYY-MM-DD)"
+      to_date: "結束日期 (YYYY-MM-DD)"
+
+education:
+  - school_zh: "學校名稱（中文）"
+    school_en: "學校名稱（英文）"
+    degree: "學位 (Bachelor/Master/PhD)"
+    major_zh: "科系（中文）"
+    major_en: "科系（英文）"
+    from_date: "起始日期 (YYYY-MM-DD)"
+    to_date: "結束日期 (YYYY-MM-DD)"
+
+marriage:
+  status: "婚姻狀態 (Single/Married/Divorced/Widowed)"
+  spouse_name_zh: "配偶中文姓名"
+  spouse_name_en: "配偶英文姓名"
+  spouse_birth_date: "配偶出生日期 (YYYY-MM-DD)"
+  spouse_nationality: "配偶國籍"
+  marriage_date: "結婚日期 (YYYY-MM-DD)"
+
+income:
+  annual_amount: "年收入金額"
+  currency: "幣別 (TWD/USD/etc)"
+
+visa_history:
+  - country: "國家"
+    type: "簽證類型"
+    number: "簽證號碼"
+    issue_date: "核發日期 (YYYY-MM-DD)"
+    expiry_date: "到期日期 (YYYY-MM-DD)"
+    status: "狀態 (Approved/Denied/Expired)"
+
+custom: {}

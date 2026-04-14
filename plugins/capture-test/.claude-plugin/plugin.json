@@ -1,0 +1,8 @@
+{
+  "name": "capture-test",
+  "version": "1.0.0",
+  "description": "通用測試情境建構工具 — 引導式訪談 + 驗證積木 + 測試日誌 + 整併優化",
+  "author": {
+    "name": "Peter Kuo"
+  }
+}

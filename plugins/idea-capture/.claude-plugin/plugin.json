@@ -1,0 +1,8 @@
+{
+  "name": "idea-capture",
+  "version": "1.0.0",
+  "description": "跨專案的 idea 快速記錄工具",
+  "author": {
+    "name": "Peter Kuo"
+  }
+}

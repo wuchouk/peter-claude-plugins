@@ -1,0 +1,8 @@
+{
+  "name": "scope-guard",
+  "version": "1.1.0",
+  "description": "開發過程中的 scope guardian — 防止 scope creep，補齊規格缺口，管理 TODO 優先級",
+  "author": {
+    "name": "Peter Kuo"
+  }
+}
