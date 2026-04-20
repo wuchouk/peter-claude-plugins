@@ -2,13 +2,38 @@
 
 `scheduled` 和 `headless` 模式下的 commit 點都用 Telegram 發訊息給 Peter，等 reply。互動模式下只有最終「送出 form」前會用 Telegram（其他確認用 AskUserQuestion）。
 
-## 用到的 tool
+## 用到的 tool（依 mode 不同）
 
-- `mcp__plugin_telegram_telegram__reply` — 送訊息（可帶 `files: ["/tmp/...png"]` 附圖）
-- `mcp__plugin_telegram_telegram__edit_message` — 進度更新（同一條訊息改內文）
-- `mcp__plugin_telegram_telegram__react` — 用 emoji 反應（簡單狀態變更）
+### Scheduled / Headless mode：**純 curl，不走 plugin**
 
-> Telegram 不會主動 push 給 skill，要等 Peter 回的訊息進到 conversation。Skill 用 polling 模式：發訊息後 wait + 監聽 inbound channel message。實作上 timeout 5-10 分鐘，超時 fallback。
+Scheduled mode 下 `claude -p` 是用 `--strict-mcp-config --mcp-config mcp-empty.json` 啟動的，**沒有載入任何 MCP server**（包含 telegram plugin）。這是為了避免 grammy plugin 和 `wait-reply.sh` 在同一個 bot 上 parallel poll `getUpdates`（Telegram API 明確禁止此行為，會造成訊息隨機被吃掉）。
+
+所以 scheduled mode 下所有 Telegram 動作都用 bash 腳本：
+
+| 動作 | 指令 |
+|------|------|
+| 送訊息 | `bash ~/Projects/justin-giveaway/scripts/telegram-send.sh send <chat_id> "<text>"` |
+| 送照片 | `bash ~/Projects/justin-giveaway/scripts/telegram-send.sh photo <chat_id> <file_path> "<caption>"` |
+| 改訊息 | `bash ~/Projects/justin-giveaway/scripts/telegram-send.sh edit <chat_id> <message_id> "<new_text>"` |
+| Emoji 反應 | `bash ~/Projects/justin-giveaway/scripts/telegram-send.sh react <chat_id> <message_id> "<emoji>"` |
+| 等回覆 | `bash ~/Projects/justin-giveaway/scripts/wait-reply.sh <chat_id> <timeout_seconds>` |
+
+每個 `send` / `photo` 回傳 Telegram API 的 JSON response（stdout），可以從中抽 `result.message_id`（要 edit 或 react 時用）：
+
+```bash
+RESP=$(bash scripts/telegram-send.sh send 1780314667 "測試")
+MSG_ID=$(echo "$RESP" | python3 -c "import sys,json; print(json.loads(sys.stdin.read())['result']['message_id'])")
+```
+
+### Interactive mode：正常用 MCP plugin
+
+在互動（Claude Code session）模式下，只有 Step 6 / Step 8 會用到 Telegram，用 MCP plugin：
+
+- `mcp__plugin_telegram_telegram__reply` — 送訊息（可帶 `files: ["/path/*.png"]` 附圖）
+- `mcp__plugin_telegram_telegram__edit_message` — 進度更新
+- `mcp__plugin_telegram_telegram__react` — emoji 反應
+
+> Telegram 不會主動 push 給 skill，要等 Peter 回的訊息進到 conversation。互動模式下訊息會以 `<channel source="telegram">` 進到 conversation。Scheduled 模式下用 `wait-reply.sh` polling getUpdates（因為 plugin 沒載入，沒有 race）。
 
 ## chat_id 取得方式
 
@@ -69,7 +94,15 @@ Form：{form_url}
 OK？回 yes 繼續填 form
 ```
 
-附 `files: ["/tmp/justin-comment-*.png", "/tmp/justin-x-share-*.png"]`
+送截圖用 `telegram-send.sh photo`（一張一個 call，caption 選填）：
+```bash
+bash ~/Projects/justin-giveaway/scripts/telegram-send.sh photo 1780314667 \
+  ~/Library/Logs/justin-giveaway/screenshots/comment-*.png \
+  "YouTube 留言"
+bash ~/Projects/justin-giveaway/scripts/telegram-send.sh photo 1780314667 \
+  ~/Library/Logs/justin-giveaway/screenshots/x-share-*.png \
+  "X 分享"
+```
 
 ⏳ Timeout 5 分鐘 → 通知並停止。
 
@@ -106,16 +139,42 @@ Log：~/Library/Logs/justin-giveaway/{filename}.log
 請手動補完，或重跑 /justin
 ```
 
-## Polling 邏輯（等 reply）
+## Polling 邏輯（等 reply）— 2026-04-20 已換成純 curl 架構
+
+**Scheduled mode 下完全不靠 plugin**。`run-justin.sh` 啟動 `claude -p` 時已經用 `--strict-mcp-config --mcp-config mcp-empty.json` 關掉所有 MCP server，所以 grammy plugin 根本不在這個 session 裡 poll，不會跟 `wait-reply.sh` 搶 `getUpdates`。
+
+實作方式：
+
+```bash
+# 送確認訊息
+RESP=$(bash ~/Projects/justin-giveaway/scripts/telegram-send.sh send 1780314667 "🎯 找到 giveaway 影片...回 yes 繼續")
+MSG_ID=$(echo "$RESP" | python3 -c "import sys,json; print(json.loads(sys.stdin.read())['result']['message_id'])")
+
+# 等回覆（最多 5 分鐘）
+REPLY=$(bash ~/Projects/justin-giveaway/scripts/wait-reply.sh 1780314667 300)
+if [[ "$REPLY" == "__TIMEOUT__" ]]; then
+  bash ~/Projects/justin-giveaway/scripts/telegram-send.sh edit 1780314667 "$MSG_ID" "⏱ 5 分鐘內沒收到確認，流程取消。"
+  exit 0
+fi
+
+# 檢查 REPLY 是不是 yes
+if [[ "${REPLY,,}" == "yes" ]] || [[ "${REPLY,,}" == "y" ]]; then
+  # 繼續 Step 4
+  ...
+fi
+```
+
+`wait-reply.sh` 的 race condition（之前跟 grammy plugin 搶 getUpdates）在這個架構下**完全解決**，因為 scheduled session 裡根本沒 plugin 在 poll。
+
+**互動模式（舊 polling 邏輯僅供參考）：**
 
 ```python
-# 偽碼
+# 舊偽碼（只適用 interactive mode，不再適用 scheduled）
 def wait_for_telegram_reply(chat_id, timeout_seconds=300):
     start = time.time()
     while time.time() - start < timeout_seconds:
-        # Telegram bot API 沒有 long poll for skill，靠 telegram plugin 把 inbound 訊息送進 conversation
-        # 實作上：用 mcp__plugin_telegram_telegram__... 沒有 read，要等 user 訊息透過 hook 進來
-        # 替代方案：用 react 標記等待狀態（⏳），讓使用者知道 bot 在等
+        # 互動模式下 plugin 把 inbound 訊息送進 conversation（<channel> tag）
+        # 下一輪 turn 會看到 Peter 的 reply
         time.sleep(5)
         # 檢查 conversation 是否有來自 chat_id 的新 inbound message
         ...

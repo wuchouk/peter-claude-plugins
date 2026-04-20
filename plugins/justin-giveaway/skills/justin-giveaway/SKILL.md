@@ -10,7 +10,7 @@ description: 自動執行 JUSTIN投資日記 的每週 giveaway 流程（YouTube
 ## 帳號資訊
 
 ```
-YOUTUBE_ACCOUNT = ororov888@gmail.com (Cubie @Cubie-p2z)
+YOUTUBE_ACCOUNT = ororov888@gmail.com (Cubie @Cubie-s1l)
 X_ACCOUNT = @diamondhanddie (Cookie Monster)
 GOOGLE_FORM_ACCOUNT = ororov888@gmail.com
 TRADINGVIEW_NAME = sku772003
@@ -34,12 +34,14 @@ STATE_FILE = ~/Library/Logs/justin-giveaway/state.json
 
 讀取使用者輸入的 flag 決定 mode：
 
-| Flag | Mode | 瀏覽器 | 確認方式 |
-|------|------|--------|---------|
-| （無） | `interactive` | chrome-devtools（操控真實 Chrome） | AskUserQuestion |
-| `--scheduled` | `scheduled` | **Playwright headless**（用 storageState cookies） | Telegram |
-| `--headless` | `headless` | Playwright headless（同 scheduled） | Telegram |
-| `--dry-run` | + dry_run flag | 同上述 mode | 只偵測 + 報告 |
+| Flag | Mode | 瀏覽器 | 確認方式 | Telegram 發訊息 |
+|------|------|--------|---------|---------------|
+| （無） | `interactive` | chrome-devtools（操控真實 Chrome） | AskUserQuestion | （不用）|
+| `--scheduled` | `scheduled` | **Playwright headless**（用 storageState cookies） | Telegram | **`scripts/telegram-send.sh`（curl）** |
+| `--headless` | `headless` | Playwright headless（同 scheduled） | Telegram | **`scripts/telegram-send.sh`（curl）** |
+| `--dry-run` | + dry_run flag | 同上述 mode | 只偵測 + 報告 | — |
+
+> ⚠️ **Scheduled mode 絕對不要呼叫 `mcp__plugin_telegram_telegram__*` 工具**。`run-justin.sh` 啟動 `claude -p` 時已經用 `--strict-mcp-config --mcp-config mcp-empty.json` 把所有 MCP server 關掉（避免 plugin 的 grammy 和 `wait-reply.sh` 搶 Telegram getUpdates）。送訊息一律用 `scripts/telegram-send.sh`，收回覆一律用 `scripts/wait-reply.sh`。
 
 選好 mode 後，依 mode 讀對應的 reference：
 
@@ -99,7 +101,7 @@ Playwright 自己開 Chromium，用 storageState JSON 載入 cookies，完全不
 
 依 mode 用對應方式詢問：
 - `interactive`：`AskUserQuestion`「找到 giveaway 影片『{title}』，要繼續嗎？」
-- `scheduled` / `headless`：用 `mcp__plugin_telegram_telegram__reply` 發訊息（模板見 `telegram-prompts.md`），等 Peter 回 yes/no（poll Telegram inbound message，timeout 5 分鐘）
+- `scheduled` / `headless`：**用 `bash scripts/telegram-send.sh send ...`**（不是 `mcp__plugin_telegram_telegram__*`，因為 scheduled session 是用 `--strict-mcp-config --mcp-config mcp-empty.json` 啟動，plugin 根本沒載入）。等 Peter 回 yes/no 用 `bash scripts/wait-reply.sh <chat_id> 300`。詳細模板和指令見 `telegram-prompts.md`。
 
 若 `--dry-run`：列印偵測結果到 log 後直接 cleanup 結束。
 
@@ -135,6 +137,9 @@ Playwright 自己開 Chromium，用 storageState JSON 載入 cookies，完全不
 把兩張截圖傳給 Telegram + 訊息：「留言和 X 分享都完成，截圖如附。準備填 form (TradingView: {TRADINGVIEW_NAME})，OK？」
 等 Peter 回 yes 才繼續。
 
+- `interactive`：用 `AskUserQuestion`（用 `Read` tool 讓截圖在 Claude Code UI 顯示即可）
+- `scheduled` / `headless`：用 `bash scripts/telegram-send.sh photo` 各送一張截圖 + `send` 送文字，然後 `bash scripts/wait-reply.sh <chat_id> 300` 等 reply（指令見 `telegram-prompts.md`）
+
 ### Step 7: Google Form（用 Playwright fill-form.mjs）
 
 > ⚠️ **所有 mode 都用 fill-form.mjs 填 form。** Google Form 的 file upload 用 Drive picker（cross-origin iframe），只有 Playwright 的 `setInputFiles` 能繞過。
@@ -169,7 +174,7 @@ cd ~/Projects/justin-giveaway/scripts && node fill-form.mjs \
 
 依 mode 詢問：
 - `interactive`：展示 `~/Library/Logs/justin-giveaway/screenshots/form-filled.png` 給 Peter 看，用 `AskUserQuestion`「Form 已填好，截圖已上傳。要送出嗎？」
-- `scheduled` / `headless`：Telegram 發送 `~/Library/Logs/justin-giveaway/screenshots/form-filled.png` + 訊息「Form 已填好，要送出嗎？回 yes 送出，回 no 取消」
+- `scheduled` / `headless`：`bash scripts/telegram-send.sh photo <chat_id> ~/Library/Logs/justin-giveaway/screenshots/form-filled.png "Form 已填好"` → `bash scripts/telegram-send.sh send <chat_id> "要送出嗎？回 yes 送出，回 no 取消"` → `bash scripts/wait-reply.sh <chat_id> 600`
 
 收到 yes → 再跑一次 fill-form.mjs 加上 `--submit` flag：
 ```bash
