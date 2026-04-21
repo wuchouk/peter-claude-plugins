@@ -1,0 +1,8 @@
+{
+  "name": "insforge",
+  "version": "1.1.0",
+  "description": "InsForge development skills — SDK usage, backend CLI, debugging, and third-party integrations (auth providers + payment facilitators)",
+  "author": {
+    "name": "Peter Kuo"
+  }
+}

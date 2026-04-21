@@ -1,0 +1,8 @@
+{
+  "name": "zeabur-watch-deploy",
+  "description": "Poll the latest Zeabur deployment after a git push and extract build log error snippets on failure. Pure bash + GraphQL, no MCP subprocess.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Peter Kuo"
+  }
+}

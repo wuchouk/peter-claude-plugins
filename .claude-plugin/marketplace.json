@@ -106,6 +106,26 @@
       },
       "source": "./plugins/session-comms",
       "category": "productivity"
+    },
+    {
+      "name": "zeabur-watch-deploy",
+      "description": "Poll the latest Zeabur deployment after a git push and extract build log error snippets on failure. Pure bash + GraphQL, no MCP subprocess.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Peter Kuo"
+      },
+      "source": "./plugins/zeabur-watch-deploy",
+      "category": "automation"
+    },
+    {
+      "name": "insforge",
+      "description": "InsForge development skills — SDK usage, backend CLI (tables / migrations / functions / storage), debugging, and third-party integrations (auth + payment). Enable per-project via <project>/.claude/settings.json.",
+      "version": "1.1.0",
+      "author": {
+        "name": "Peter Kuo"
+      },
+      "source": "./plugins/insforge",
+      "category": "development"
     }
   ]
 }
