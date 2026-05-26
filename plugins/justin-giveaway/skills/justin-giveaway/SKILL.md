@@ -40,6 +40,7 @@ STATE_FILE = ~/Library/Logs/justin-giveaway/state.json
 | `--scheduled` | `scheduled` | **Playwright headless**（用 storageState cookies） | Telegram | **`scripts/telegram-send.sh`（curl）** |
 | `--headless` | `headless` | Playwright headless（同 scheduled） | Telegram | **`scripts/telegram-send.sh`（curl）** |
 | `--dry-run` | + dry_run flag | 同上述 mode | 只偵測 + 報告 | — |
+| `--retry-last` | + retry flag | 不開 YouTube/X（跳過 Step 1-5），只用 Playwright 跑 form | AskUserQuestion 或 Telegram 確認 retry | 視搭配 mode |
 
 > ⚠️ **Scheduled mode 絕對不要呼叫 `mcp__plugin_telegram_telegram__*` 工具**。`run-justin.sh` 啟動 `claude -p` 時已經用 `--strict-mcp-config --mcp-config mcp-empty.json` 把所有 MCP server 關掉（避免 plugin 的 grammy 和 `wait-reply.sh` 搶 Telegram getUpdates）。送訊息一律用 `scripts/telegram-send.sh`，收回覆一律用 `scripts/wait-reply.sh`。
 
@@ -55,15 +56,44 @@ chrome-devtools 連本地 Chrome 時，Chrome 會跳「Allow remote debugging?�
 Scheduled mode（launchd 觸發）沒人在電腦前，沒人點 Allow → 連不上。
 Playwright 自己開 Chromium，用 storageState JSON 載入 cookies，完全不需要人。
 
+## Retry mode (`--retry-last`)
+
+**用途：** 上次跑完 `last_status` 是 `submitted_uncertain`，Peter 手動到 Google Form 確認**沒**送到，想用既有的留言/分享截圖**重新送一次 form**。也適用於 form 因為網路問題 / Drive 暫時掛掉等原因送出失敗的情況。
+
+**前置條件**（不滿足直接 exit + 告知原因）：
+- `state.json` 存在且有 `last_processed_video_id` + `last_form_url`
+- `~/Library/Logs/justin-giveaway/screenshots/` 內至少 1 個 `comment-*.png` 和 1 個 `x-share-*.png`（從上次的執行留下）
+
+**Flow**（取代主流程 Step 1-5）：
+
+1. **Step 0 修改版** — 同主流程 Step 0 但**跳過清截圖步驟**（截圖是這次要用的素材）
+2. 從 state.json 讀 `last_processed_video_id`、`last_form_url`、`last_status`
+3. Glob `screenshots/comment-*.png` 和 `screenshots/x-share-*.png`，各取最新一個。找不到 → exit 1 + 告知「沒有可重用的截圖，請改跑完整 /justin」
+4. **Retry 確認**（取代主流程 Step 3 的 Confirm #1）：
+   - `interactive`：`AskUserQuestion` 「要重送 form 給影片 `{video_id}` 嗎？上次 status: `{last_status}`，會用截圖 `{comment_path}` + `{x_share_path}`」
+   - `scheduled` / `headless`：Telegram 訊息 + `wait-reply.sh` 等 yes/no
+   - 拒絕 / timeout → cleanup + exit
+5. **跳過主流程 Step 4 (留言) 和 Step 5 (X 分享)** — 已經做過了
+6. 跑主流程 **Step 6** (fill-form.mjs `--submit`)，用 `last_form_url` 當 `--form-url`，剛 glob 到的截圖路徑當 `--comment-screenshot` / `--share-screenshot`
+7. **Step 7** 結算 — 同主流程，依 exit code 更新 state.json + 發 Telegram。**注意**：retry 成功會把 `last_status` 從 `submitted_uncertain` 蓋成 `submitted`
+
+**`--retry-last --dry-run`**：印出「會用 video={id}, form={url}, comment={path}, x-share={path}」後直接 exit，不跑 fill-form.mjs。
+
+**不會做的事**：
+- 不重新偵測影片（影片從 state.json 拿）
+- 不重新留言、不重新 X 分享（避免重複動作）
+- 不清舊截圖（要拿來重用）
+- 不檢查影片是不是「上次處理過」（這就是 retry 的目的，bypass 該檢查）
+
 ## 主流程
 
 ### Step 0: Setup
 
 1. `mkdir -p ~/Library/Logs/justin-giveaway/screenshots`
-2. **清掉上週的截圖**：`rm -f ~/Library/Logs/justin-giveaway/screenshots/*.png`
+2. **清掉上週的截圖**：`rm -f ~/Library/Logs/justin-giveaway/screenshots/*.png`  ← **如果是 `--retry-last`，跳過這步**
 3. 開啟 log file `$LOG_DIR/$(date +%Y-%m-%d-%H%M).log`，所有 stage 寫入時間戳 + 動作
 4. 讀 `state.json`（若存在）：取得 `last_processed_video_id`，避免重複處理同一支影片
-5. 依 mode 初始化瀏覽器（chrome-devtools 或 Playwright）
+5. 依 mode 初始化瀏覽器（chrome-devtools 或 Playwright）。**Retry mode 一律用 Playwright**（fill-form.mjs 跑在 Playwright）
 
 ### Step 1: 找最新影片
 
@@ -201,7 +231,7 @@ cd ~/Projects/justin-giveaway/scripts && node fill-form.mjs \
 3. **不刪截圖** — 保留在 `~/Library/Logs/justin-giveaway/screenshots/`，Peter 可以在 Telegram 要求查看。下次 run 的 Step 0 會自動清掉上週的
 4. Telegram 最終結算訊息（**附截圖**讓 Peter 自己驗收）：
    - **exit 0**：「✅ JUSTIN giveaway 完成」+ 附 `comment-*.png` + `x-share-*.png` + `/tmp/justin-form-filled.png` + submit 時間
-   - **exit 2**：「⚠️ JUSTIN giveaway 已 Submit 但確認文字沒偵測到 — 請手動到 Google Form 確認是否真的送出」+ 附 3 張截圖 + `/tmp/justin-form-submit-result.png`。state.json 已標記避免重複，**不會再自動跑這支影片**
+   - **exit 2**：「⚠️ JUSTIN giveaway 已 Submit 但確認文字沒偵測到 — 請手動到 Google Form 確認是否真的送出。如果**沒**送到，跑 `/justin --retry-last` 用既有截圖只重送 form（不重複留言/分享）」+ 附 3 張截圖 + `/tmp/justin-form-submit-result.png`。state.json 已標記避免重複，**不會再自動跑這支影片**
    - **exit 1**：「⚠️ JUSTIN giveaway 中斷在 Step X」+ error 摘要 + log 路徑 + 已有的截圖
 5. 寫入 log file 「[done]」
 

@@ -11,6 +11,7 @@ allowed-tools: AskUserQuestion, Read, Write, Edit, Glob, Grep, Bash(date:*), Bas
 - `--scheduled`：launchd 觸發的 Playwright headless 模式（用 Telegram 確認）
 - `--headless`：同 scheduled（Playwright headless + Telegram 確認）
 - `--dry-run`：只偵測不留言/不分享/不送 form
+- `--retry-last`：跳過偵測 + 留言 + X 分享，**只重跑 form 送出**。用 `state.json` 的 `last_processed_video_id` + `last_form_url`，搭配 `screenshots/` 既有的截圖。**主要用途**：上次跑 status=`submitted_uncertain`，手動確認 form 沒送到後想重送。詳見 SKILL.md「Retry mode」。可搭配 `--scheduled` / `--headless`
 - 無參數：互動模式（預設 chrome-devtools 操控真實 Chrome）
 
 跑 JUSTIN投資日記 (@justin-fu) 的每週 giveaway 流程：偵測新影片 → 留言「謝謝J大」→ X 分享 → 填 Google Form 上傳兩張截圖 → 等使用者最終確認後送出。
