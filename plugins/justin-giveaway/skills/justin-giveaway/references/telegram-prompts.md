@@ -1,6 +1,6 @@
 # Telegram 訊息模板 + 確認回路
 
-`scheduled` 和 `headless` 模式下的 commit 點都用 Telegram 發訊息給 Peter，等 reply。互動模式下只有最終「送出 form」前會用 Telegram（其他確認用 AskUserQuestion）。
+`scheduled` 和 `headless` 模式下流程只有 **1 個 reply 點**（Step 3：是否處理偵測到的 giveaway 影片），跑完 yes 之後 comment + X share + form 填寫 + form submit 全部自動執行，最後送結算訊息。互動模式下唯一的確認用 `AskUserQuestion`。
 
 ## 用到的 tool（依 mode 不同）
 
@@ -27,7 +27,7 @@ MSG_ID=$(echo "$RESP" | python3 -c "import sys,json; print(json.loads(sys.stdin.
 
 ### Interactive mode：正常用 MCP plugin
 
-在互動（Claude Code session）模式下，只有 Step 6 / Step 8 會用到 Telegram，用 MCP plugin：
+在互動（Claude Code session）模式下，唯一的 Step 3 確認用 `AskUserQuestion`，Telegram 只在最終結算（Step 7）時可選擇發訊息給自己備份。用 MCP plugin：
 
 - `mcp__plugin_telegram_telegram__reply` — 送訊息（可帶 `files: ["/path/*.png"]` 附圖）
 - `mcp__plugin_telegram_telegram__edit_message` — 進度更新
@@ -80,55 +80,39 @@ Form：{form_url}
 
 ⏳ 等 Peter reply。Timeout 5 分鐘 → 取消流程。
 
-### #4 留言 + X 分享完成，等確認 (#2)
+### #4 進度（**不等回覆**，可選）
+
+留言 + X 分享完成、開始填 form 之前送一個 progress 通知，讓 Peter 從 Telegram 看得到流程跑到哪：
 
 ```
 ✅ 留言「謝謝J大」已發出
 ✅ X 分享已 post
-
-附上兩張截圖，準備填 form：
-- TradingView name: sku772003
-- 上傳截圖 1: YouTube 留言
-- 上傳截圖 2: X 分享
-
-OK？回 yes 繼續填 form
+🔄 開始填 form + 送出（無 pre-submit 確認）...
 ```
 
-送截圖用 `telegram-send.sh photo`（一張一個 call，caption 選填）：
-```bash
-bash ~/Projects/justin-giveaway/scripts/telegram-send.sh photo 1780314667 \
-  ~/Library/Logs/justin-giveaway/screenshots/comment-*.png \
-  "YouTube 留言"
-bash ~/Projects/justin-giveaway/scripts/telegram-send.sh photo 1780314667 \
-  ~/Library/Logs/justin-giveaway/screenshots/x-share-*.png \
-  "X 分享"
-```
+`send` 完就不等 reply，直接跑 Step 6。
 
-⏳ Timeout 5 分鐘 → 通知並停止。
-
-### #5 Form 已填好，等最終送出 (#3)
-
-```
-📝 Google Form 已填好：
-- TradingView: sku772003 ✅
-- YouTube 截圖: 已上傳 ✅
-- X 截圖: 已上傳 ✅
-
-⚠️ 即將送出表單。回 yes 送出，no 取消（form 會留著讓你手動處理）
-```
-
-⏳ Timeout 10 分鐘 → 不送出，告知 Peter form 還開著。
-
-### #6 完成
+### #5 完成（成功）
 
 ```
 🎉 JUSTIN giveaway 處理完成
 影片：{title}
-Form 已送出時間：{ISO timestamp}
+TradingView：sku772003
+Form 送出時間：{ISO timestamp}
 Log：~/Library/Logs/justin-giveaway/{filename}.log
 ```
 
-### #7 失敗 / 中斷
+**附 3 張截圖**讓 Peter 自己驗收實際內容：
+```bash
+bash ~/Projects/justin-giveaway/scripts/telegram-send.sh photo <chat_id> \
+  ~/Library/Logs/justin-giveaway/screenshots/comment-*.png "YouTube 留言"
+bash ~/Projects/justin-giveaway/scripts/telegram-send.sh photo <chat_id> \
+  ~/Library/Logs/justin-giveaway/screenshots/x-share-*.png "X 分享"
+bash ~/Projects/justin-giveaway/scripts/telegram-send.sh photo <chat_id> \
+  /tmp/justin-form-filled.png "Form 送出前"
+```
+
+### #6 失敗 / 中斷
 
 ```
 ⚠️ JUSTIN giveaway 中斷
@@ -137,6 +121,11 @@ Log：~/Library/Logs/justin-giveaway/{filename}.log
 Log：~/Library/Logs/justin-giveaway/{filename}.log
 
 請手動補完，或重跑 /justin
+```
+
+附上已經產生的截圖（如果有），讓 Peter 知道走到哪一步：
+```bash
+# 視當下進度附上 comment-*.png / x-share-*.png / /tmp/justin-form-debug.png / /tmp/justin-form-filled.png
 ```
 
 ## Polling 邏輯（等 reply）— 2026-04-20 已換成純 curl 架構

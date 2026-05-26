@@ -109,7 +109,7 @@ chrome-devtools 用 **uid**（從 `take_snapshot` 的 a11y tree 取得）來定�
 4. 等 3 秒
 5. **截圖**：`take_screenshot` filePath="/tmp/justin-x-share-{timestamp}.png"
 
-## Step 7: Google Form 操作
+## Step 6: Google Form 操作
 
 > ⚠️ **不要用 chrome-devtools 填 Google Form 的 file upload。** Drive picker 是 cross-origin iframe，無法操作。已有 Playwright 腳本 `fill-form.mjs` 專門處理。
 

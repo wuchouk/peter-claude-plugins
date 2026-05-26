@@ -97,7 +97,9 @@ Playwright 自己開 Chromium，用 storageState JSON 載入 cookies，完全不
 
 **dry-run 模式也要走到這一步**（進影片頁、讀 pinned comment），不能只看 title 就判定。Dry-run 在 Step 2 判斷完後報告結果 + cleanup 結束，不繼續 Step 3+。
 
-### Step 3: 確認點 #1（影片偵測完）
+### Step 3: 確認點（**唯一一個**）
+
+⚠️ **整個流程只有這一個確認點。** Peter 回 yes 後，後續 Step 4–Step 6（留言 + X 分享 + form 填寫 + form submit）**全部自動執行，不再詢問**。Submit 不可逆，失敗時靠 Step 7 的 Telegram 結算訊息發現並手動補救。
 
 依 mode 用對應方式詢問：
 - `interactive`：`AskUserQuestion`「找到 giveaway 影片『{title}』，要繼續嗎？」
@@ -105,7 +107,7 @@ Playwright 自己開 Chromium，用 storageState JSON 載入 cookies，完全不
 
 若 `--dry-run`：列印偵測結果到 log 後直接 cleanup 結束。
 
-若使用者拒絕：cleanup 後結束。
+若使用者拒絕或 timeout：cleanup 後結束。
 
 ### Step 4: 留言「謝謝J大」
 
@@ -132,30 +134,43 @@ Playwright 自己開 Chromium，用 storageState JSON 載入 cookies，完全不
 5. **截圖**：截 tweet 元素（包含帳號名 + 影片連結），存 `~/Library/Logs/justin-giveaway/screenshots/x-share-$(date +%s).png`
 6. log: `[Step 5] X share posted + screenshot saved to ...`
 
-### Step 6: 確認點 #2（commit 完成）
+### Step 6: Google Form（fill + submit 一次到位）
 
-把兩張截圖傳給 Telegram + 訊息：「留言和 X 分享都完成，截圖如附。準備填 form (TradingView: {TRADINGVIEW_NAME})，OK？」
-等 Peter 回 yes 才繼續。
+> ⚠️ **所有 mode 都用 fill-form.mjs 填 form。** Google Form 的 file upload 用 Drive picker（cross-origin iframe），只有 Playwright catch Browse 按鈕觸發的 native fileChooser event 才能繞過。
 
-- `interactive`：用 `AskUserQuestion`（用 `Read` tool 讓截圖在 Claude Code UI 顯示即可）
-- `scheduled` / `headless`：用 `bash scripts/telegram-send.sh photo` 各送一張截圖 + `send` 送文字，然後 `bash scripts/wait-reply.sh <chat_id> 300` 等 reply（指令見 `telegram-prompts.md`）
+**（選用）進度訊息**：scheduled / headless mode 可以先送一個不等回覆的進度訊息，讓 Peter 看得到當前狀態：
+```bash
+bash ~/Projects/justin-giveaway/scripts/telegram-send.sh send <chat_id> "✅ 留言 + X 分享完成，開始填 form 並送出..."
+```
 
-### Step 7: Google Form（用 Playwright fill-form.mjs）
-
-> ⚠️ **所有 mode 都用 fill-form.mjs 填 form。** Google Form 的 file upload 用 Drive picker（cross-origin iframe），只有 Playwright 的 `setInputFiles` 能繞過。
-
-呼叫 `fill-form.mjs` 腳本完成 form 填寫 + 上傳：
+呼叫 `fill-form.mjs` 直接帶 `--submit`，**一次完成填寫 + 上傳 + 送出**：
 
 ```bash
 cd ~/Projects/justin-giveaway/scripts && node fill-form.mjs \
   --form-url "{form_url}" \
   --tv-name "{TRADINGVIEW_NAME}" \
   --comment-screenshot "~/Library/Logs/justin-giveaway/screenshots/comment-*.png" \
-  --share-screenshot "~/Library/Logs/justin-giveaway/screenshots/x-share-*.png"
+  --share-screenshot "~/Library/Logs/justin-giveaway/screenshots/x-share-*.png" \
+  --submit \
+  --headless
 ```
 
-**不加 `--submit`** — 先讓腳本填好 form + 上傳截圖，但不送出。
-腳本完成後會存驗證截圖到 `~/Library/Logs/justin-giveaway/screenshots/form-filled.png`。
+腳本內部流程：
+1. 用 storageState cookies 開 Chromium（無頭）
+2. 偵測並清掉 autosave draft（如果有上一次未完成的殘留）
+3. 填 TradingView 名稱
+4. 對每個 file field：click "Add file" → wait for Drive picker iframe → click "Browse" → intercept Playwright fileChooser event → setFiles → 等上傳完成
+5. 等 picker 自動關閉；不關就按 Escape，再不關就點 picker 右上角 X
+6. 截 verification screenshot 到 `/tmp/justin-form-filled.png`
+7. Click Submit
+8. 偵測「Your response has been recorded」/「您的回應已記錄」/「已記錄你的回覆」確認文字
+
+**Exit code 語意**（重要 — Step 7 依此決定要不要寫 state.json）：
+- **exit 0** = 確認文字偵測到 → form 確實送出。最後一行 log `✅ Form submitted successfully!`
+- **exit 2** = Submit 按了但確認文字沒偵測到 → 狀態**不確定**（form 多半送出了，少數可能沒）。寫 `/tmp/justin-form-submit-result.png`，stderr 帶警告
+- **exit 1** = 確定失敗（找不到 form / 上傳 throw / submit click 被擋等）。stderr 帶 error message
+
+**不重試**（避免重複送 form）。exit 2 預設**當作已送出**處理 state.json，避免下次跑時誤判為未處理然後重複留言 + 分享 + 送 form。
 
 **前置條件：**
 - `~/.claude/justin-storage-state.json` 存在（Google + X 登入 cookies）
@@ -164,44 +179,30 @@ cd ~/Projects/justin-giveaway/scripts && node fill-form.mjs \
   cd ~/Projects/justin-giveaway/scripts && node bootstrap-auth.mjs
   ```
 
-**fill-form.mjs 會自動處理：**
-- Dismiss Google Forms 的 "Autosave your work" 彈窗
-- 偵測 autosave draft（如果有之前上傳的檔案就跳過）
-- 在 Drive picker iframe 內找 `input[type=file]` 直接用 `setInputFiles`（繞過 Browse 按鈕）
-- 等待上傳完成
+### Step 7: Cleanup + 寫 state + 結算訊息
 
-### Step 8: 確認點 #3（最終送出）
+1. 不論成功或失敗：close tabs（chrome mode）/ close browser context（playwright mode 由 fill-form.mjs 自己處理）
+2. **依 Step 6 exit code 寫 `state.json`**：
 
-依 mode 詢問：
-- `interactive`：展示 `~/Library/Logs/justin-giveaway/screenshots/form-filled.png` 給 Peter 看，用 `AskUserQuestion`「Form 已填好，截圖已上傳。要送出嗎？」
-- `scheduled` / `headless`：`bash scripts/telegram-send.sh photo <chat_id> ~/Library/Logs/justin-giveaway/screenshots/form-filled.png "Form 已填好"` → `bash scripts/telegram-send.sh send <chat_id> "要送出嗎？回 yes 送出，回 no 取消"` → `bash scripts/wait-reply.sh <chat_id> 600`
+   | exit code | state.json `last_status` | 行為 |
+   |-----------|--------------------------|------|
+   | 0 (確認送出) | `submitted` | 寫入 state.json，下次跳過 |
+   | 2 (不確定) | `submitted_uncertain` | **仍寫入** state.json（避免重複送），但欄位明確標記不確定 |
+   | 1 (確定失敗) | （不寫入） | 下次仍會處理 |
 
-收到 yes → 再跑一次 fill-form.mjs 加上 `--submit` flag：
-```bash
-cd ~/Projects/justin-giveaway/scripts && node fill-form.mjs \
-  --form-url "{form_url}" \
-  --tv-name "{TRADINGVIEW_NAME}" \
-  --comment-screenshot "~/Library/Logs/justin-giveaway/screenshots/comment-*.png" \
-  --share-screenshot "~/Library/Logs/justin-giveaway/screenshots/x-share-*.png" \
-  --submit
-```
-
-收到 no 或 timeout → log + 不送出，告知 Peter「form 已填好但未送出，手動到 Chromium 視窗處理」
-
-### Step 9: Cleanup + 寫 state
-
-1. 不論成功或失敗：close tabs（chrome mode）/ close browser context（playwright mode）
-2. 若 Step 8 成功送出：更新 `state.json`：
    ```json
    {
      "last_processed_video_id": "...",
      "last_processed_at": "ISO timestamp",
      "last_form_url": "...",
-     "last_status": "submitted"
+     "last_status": "submitted" | "submitted_uncertain"
    }
    ```
 3. **不刪截圖** — 保留在 `~/Library/Logs/justin-giveaway/screenshots/`，Peter 可以在 Telegram 要求查看。下次 run 的 Step 0 會自動清掉上週的
-4. Telegram 最終結算訊息：「✅ JUSTIN giveaway 處理完成 / ⚠️ 中斷在 Step X」
+4. Telegram 最終結算訊息（**附截圖**讓 Peter 自己驗收）：
+   - **exit 0**：「✅ JUSTIN giveaway 完成」+ 附 `comment-*.png` + `x-share-*.png` + `/tmp/justin-form-filled.png` + submit 時間
+   - **exit 2**：「⚠️ JUSTIN giveaway 已 Submit 但確認文字沒偵測到 — 請手動到 Google Form 確認是否真的送出」+ 附 3 張截圖 + `/tmp/justin-form-submit-result.png`。state.json 已標記避免重複，**不會再自動跑這支影片**
+   - **exit 1**：「⚠️ JUSTIN giveaway 中斷在 Step X」+ error 摘要 + log 路徑 + 已有的截圖
 5. 寫入 log file 「[done]」
 
 ## 失敗處理原則

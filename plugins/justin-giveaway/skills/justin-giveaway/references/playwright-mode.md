@@ -164,16 +164,18 @@ await xPage.screenshot({ path: `${screenshotDir}/x-share-${dateStr}.png` });
 
 > X 的 `[data-testid="tweetButton"]` selector 偶爾會改版。如果找不到，用 snapshot 找 Post/發佈 按鈕。
 
-## Step 7: Google Form
+## Step 6: Google Form
 
-**所有 mode 統一用 `fill-form.mjs`**（已驗證可靠）：
+**所有 mode 統一用 `fill-form.mjs`** 帶 `--submit` 一次到位（fill + upload + submit，無 pre-submit 確認）：
 
 ```bash
 cd ~/Projects/justin-giveaway/scripts && node fill-form.mjs \
   --form-url "{form_url}" \
   --tv-name "sku772003" \
   --comment-screenshot "~/Library/Logs/justin-giveaway/screenshots/comment-*.png" \
-  --share-screenshot "~/Library/Logs/justin-giveaway/screenshots/x-share-*.png"
+  --share-screenshot "~/Library/Logs/justin-giveaway/screenshots/x-share-*.png" \
+  --submit \
+  --headless
 ```
 
 ## Cleanup
