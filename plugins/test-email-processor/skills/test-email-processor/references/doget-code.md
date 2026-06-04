@@ -231,23 +231,77 @@ function _testGetSheetData(params) {
   return {tab: params.tab, range: params.range || 'all', rowCount: data.length, data: data};
 }
 
+/**
+ * 列出歸檔資料夾內的檔案 + 子資料夾。
+ * v3.38+ 起會根據 CONFIG.STORAGE_PROVIDER 自動 dispatch 到 Drive 或 Dropbox。
+ *
+ * Drive 模式：傳 folderId 或 folderPath（相對於 PROJECT_FOLDER）
+ * Dropbox 模式：傳 folderPath（相對於 DROPBOX_ROOT_PATH 或以 / 開頭的絕對路徑）
+ *
+ * 回傳統一 schema：{ provider, folder, fileCount, files[], subfolderCount, subfolders[] }
+ */
 function _testGetDriveFiles(params) {
+  if (CONFIG.STORAGE_PROVIDER === 'dropbox') {
+    return _testGetDropboxFiles(params);
+  }
+  return _testGetDriveFilesLegacy(params);
+}
+
+function _testGetDropboxFiles(params) {
+  var rootPath = _getDropboxRootPath();
+  var targetPath;
+  if (!params.folderPath) {
+    targetPath = rootPath;
+  } else if (params.folderPath.charAt(0) === '/') {
+    targetPath = params.folderPath.replace(/\/+$/, '');
+  } else {
+    targetPath = _dropboxJoinPath(rootPath, params.folderPath);
+  }
+
+  var entries = _dropboxListFolderAll(targetPath);
+  var files = [];
+  var subfolders = [];
+  for (var i = 0; i < entries.length; i++) {
+    var entry = entries[i];
+    if (entry['.tag'] === 'file') {
+      files.push({
+        name: entry.name,
+        size: entry.size,
+        path: entry.path_display,
+        date: entry.client_modified || entry.server_modified,
+        lastUpdated: entry.server_modified
+      });
+    } else if (entry['.tag'] === 'folder') {
+      subfolders.push({ name: entry.name, path: entry.path_display });
+    }
+  }
+
+  return {
+    provider: 'dropbox',
+    folder: targetPath,
+    folderId: targetPath,
+    fileCount: files.length,
+    files: files,
+    subfolderCount: subfolders.length,
+    subfolders: subfolders
+  };
+}
+
+function _testGetDriveFilesLegacy(params) {
   var folder;
   try {
     if (params.folderId) {
       folder = DriveApp.getFolderById(params.folderId);
     } else if (params.folderPath) {
-      // 從專案根資料夾按路徑找
       var parts = params.folderPath.split('/');
       folder = _getProjectFolder();
       for (var i = 0; i < parts.length; i++) {
-        if (!parts[i]) continue;  // 跳過空字串
+        if (!parts[i]) continue;
         var subFolders = folder.getFoldersByName(parts[i]);
         if (!subFolders.hasNext()) return {error: 'Folder not found: ' + parts[i], searchedIn: folder.getName()};
         folder = subFolders.next();
       }
     } else {
-      // 預設：專案根資料夾
       folder = _getProjectFolder();
     }
   } catch(e) {
@@ -267,7 +321,6 @@ function _testGetDriveFiles(params) {
     });
   }
 
-  // 也列出子資料夾
   var subfolders = [];
   var sf = folder.getFolders();
   while (sf.hasNext()) {
@@ -276,6 +329,7 @@ function _testGetDriveFiles(params) {
   }
 
   return {
+    provider: 'drive',
     folder: folder.getName(),
     folderId: folder.getId(),
     fileCount: list.length,

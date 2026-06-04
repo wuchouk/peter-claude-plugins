@@ -336,6 +336,12 @@ gmail_read_message(messageId) → 驗證信件詳細資訊（labelIds, snippet�
 盡量用 HTTP trigger 的 `getSheetData` / `getDriveFiles` 取得結構化資料。
 只在需要視覺確認或截圖時才用 claude-in-chrome。
 
+> **Dropbox 部署（v3.38+）**：`getDriveFiles` 會根據 `CONFIG.STORAGE_PROVIDER` 自動
+> dispatch 到 Drive 或 Dropbox。回傳格式新增 `provider` 欄位（`'drive'` 或 `'dropbox'`）。
+> Dropbox 時 `folderPath` 可傳相對路徑（相對 `DROPBOX_ROOT_PATH`）或絕對路徑（`/...`）；
+> `folderId` 被忽略。檔案物件多一個 `path` 欄位（Dropbox 完整路徑）。
+> 子資料夾不含 `id`，改用 `path`。
+
 claude-in-chrome 驗證步驟：
 1. `tabs_create_mcp` 開新分頁
 2. `navigate` 到目標 URL
