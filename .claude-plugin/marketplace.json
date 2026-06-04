@@ -8,16 +8,6 @@
   },
   "plugins": [
     {
-      "name": "devlog",
-      "description": "開發日誌記錄系統 v2 — 引導式訪談 + 里程碑自動偵測 + OpenMemory 整合",
-      "version": "2.0.0",
-      "author": {
-        "name": "Peter Kuo"
-      },
-      "source": "./plugins/devlog",
-      "category": "productivity"
-    },
-    {
       "name": "test-email-processor",
       "description": "Email processor automated testing — doGet HTTP trigger + Gmail MCP + claude-in-chrome verification",
       "version": "1.0.0",

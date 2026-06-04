@@ -6,7 +6,6 @@ Personal plugin marketplace for Claude Code / Claude Desktop Cowork.
 
 | Plugin | Description |
 |--------|-------------|
-| [devlog](plugins/devlog/) | 開發日誌記錄系統 — 引導式訪談 + OpenMemory 整合 |
 
 ## Installation
 
