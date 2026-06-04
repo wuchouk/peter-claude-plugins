@@ -1,0 +1,8 @@
+{
+  "name": "pre-commit-pipeline",
+  "version": "0.1.0",
+  "description": "Commit/ship 守門員 — hook 機制強制驗證 /simplify、/review、/verify-tests、/document-release 跑過才放行，含 verify-tests skill",
+  "author": {
+    "name": "Peter Kuo"
+  }
+}

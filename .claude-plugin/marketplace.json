@@ -116,6 +116,16 @@
       },
       "source": "./plugins/insforge",
       "category": "development"
+    },
+    {
+      "name": "pre-commit-pipeline",
+      "description": "Commit/ship 守門員 — hook 機制強制驗證 /simplify、/review、/verify-tests、/document-release、/tidy-docs 跑過才放行，含 verify-tests skill",
+      "version": "0.1.0",
+      "author": {
+        "name": "Peter Kuo"
+      },
+      "source": "./plugins/pre-commit-pipeline",
+      "category": "productivity"
     }
   ]
 }
