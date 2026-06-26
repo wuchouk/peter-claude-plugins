@@ -13,19 +13,17 @@ EOF
   exit 1
 fi
 
-# Step alias → marker key
-case "$STEP" in
-  simplify)         KEY="simplify" ;;
-  review)           KEY="review" ;;
-  verify-tests|tests) KEY="tests" ;;
-  document-release|document_release) KEY="document_release" ;;
-  tidy-docs|tidy_docs) KEY="tidy_docs" ;;
-  *)
-    echo "Unknown step: $STEP" >&2
-    echo "Valid: simplify | review | verify-tests | document-release | tidy-docs" >&2
-    exit 1
-    ;;
-esac
+# Step alias → marker key (single source: pipeline-steps.json via pipeline-lib.sh)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=/dev/null
+. "$SCRIPT_DIR/pipeline-lib.sh"
+
+KEY="$(pipeline_resolve_alias "$STEP")"
+if [ -z "$KEY" ]; then
+  echo "Unknown step: $STEP" >&2
+  echo "Valid aliases: $(jq -r '.aliases | keys | join(" | ")' "$PIPELINE_STEPS_JSON")" >&2
+  exit 1
+fi
 
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || true)
 if [ -z "$REPO_ROOT" ]; then
@@ -33,7 +31,6 @@ if [ -z "$REPO_ROOT" ]; then
   exit 1
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 STAGED_HASH=$(bash "$SCRIPT_DIR/compute-staged-hash.sh")
 NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 

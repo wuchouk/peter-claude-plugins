@@ -1,0 +1,25 @@
+{
+  "_comment": "Single source of truth for pipeline gate steps. All guards + pipeline-mark-done.sh read this via pipeline-lib.sh. To add/remove a required gate step, edit ONLY this file.",
+  "gates": {
+    "commit": ["simplify", "review", "tests"],
+    "ship": ["simplify", "review", "tests", "document_release", "tidy_docs"]
+  },
+  "aliases": {
+    "simplify": "simplify",
+    "review": "review",
+    "tests": "tests",
+    "verify-tests": "tests",
+    "document-release": "document_release",
+    "document_release": "document_release",
+    "tidy-docs": "tidy_docs",
+    "tidy_docs": "tidy_docs"
+  },
+  "help": {
+    "simplify": "/simplify, then: {MARK} simplify",
+    "review": "/review, then:   {MARK} review",
+    "tests": "/verify-tests (writes its own marker)",
+    "document_release": "/document-release, then: {MARK} document-release",
+    "tidy_docs": "/tidy-docs, then: {MARK} tidy-docs"
+  },
+  "batch_window_seconds": 5
+}
