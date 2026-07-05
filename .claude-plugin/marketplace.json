@@ -18,16 +18,6 @@
       "category": "productivity"
     },
     {
-      "name": "capture-test",
-      "description": "通用測試情境建構工具 — 引導式訪談 + 驗證積木 + 測試日誌 + 整併優化",
-      "version": "1.0.0",
-      "author": {
-        "name": "Peter Kuo"
-      },
-      "source": "./plugins/capture-test",
-      "category": "testing"
-    },
-    {
       "name": "skill-hygiene",
       "description": "Skill 維護工具 — gotchas 累積 + usage tracking + 使用量報告",
       "version": "1.0.0",
