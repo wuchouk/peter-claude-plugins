@@ -127,6 +127,34 @@ Decisions array 範例：
 
 `status` 欄位值：`passed` / `failed` / `skipped`。
 
+## Evidence 規則（雙迴路 B-2）
+
+讀 `docs/verification/config.yaml`（不存在則本節全部跳過，marker 不含 evidence 欄位）：
+
+1. staged diff 有檔案 match `layers.ui.paths` → `evidence_required` 加 `"render"`。
+   render 證據 = 真實 render 過的具體產物路徑：跑過的 Playwright spec（附 pass 輸出）或 walkthrough 截圖檔路徑。
+2. staged diff 有檔案 match `layers.real_sample_pipeline.paths` → `evidence_required` 加 `"real_sample"`。
+   real_sample 證據 = runner 對 corpus 的執行結果摘要路徑（測試報告或輸出檔）。
+3. commit 訊息將以 `fix` 開頭（conventional commit）→ marker 必須含 `regression`：
+   `{"test": "<新增/更新的 regression test 路徑>"}` 或 `{"skip_reason": "<為何無法自動化>"}`。
+
+Marker payload 範例（在既有欄位之外新增）：
+
+```json
+{
+  "tests": {
+    "staged_hash": "…",
+    "done_at": "2026-07-05T12:00:00Z",
+    "evidence_required": ["render"],
+    "evidence": { "render": "docs/test-report/verify-2026-07-05-foo.md" },
+    "regression": { "test": "apps/reader/tests/download-retry.test.ts" }
+  }
+}
+```
+
+證據必須真實存在（guard 只驗欄位非空，誠實是你的責任——附假路徑等同繞過 gate）。
+無法提供時照舊走 `[s]` skip + 理由。
+
 ## Step 7 — 回報
 
 跟使用者確認 marker 寫好，告訴他下個 commit 應該不會被 hook 擋（除非 staged diff 又變了）。
