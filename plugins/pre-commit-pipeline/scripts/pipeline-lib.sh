@@ -141,3 +141,47 @@ pipeline_eval_gate() {
   } >&2
   return 1
 }
+
+# pipeline_check_evidence <label> [commit_msg]
+#   Hard-checks the tests marker payload written by /verify-tests:
+#   1. every key in .tests.evidence_required must have a non-empty .tests.evidence[key]
+#   2. if commit_msg starts with "fix", .tests.regression.test or .regression.skip_reason must be non-empty
+#   Returns 1 + BLOCKED report on stderr when violated. Missing marker/file is NOT
+#   handled here (the gate itself already blocks that case).
+pipeline_check_evidence() {
+  local label="${1:-pre-commit-pipeline}" msg="${2:-}"
+  local repo_root state_file entry
+  repo_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+  [ -z "$repo_root" ] && return 0
+  state_file="$repo_root/.claude/pipeline-state.json"
+  [ -f "$state_file" ] || return 0
+  entry=$(jq -c '.tests // null' "$state_file" 2>/dev/null || echo null)
+  [ "$entry" = "null" ] && return 0
+
+  local missing_evidence
+  missing_evidence=$(echo "$entry" | jq -r '. as $t | ($t.evidence_required // [])[] | select((($t.evidence // {})[.] // "") == "")')
+  if [ -n "$missing_evidence" ]; then
+    {
+      echo ""
+      echo "[$label] BLOCKED — evidence missing for required kinds:"
+      echo "$missing_evidence" | sed 's/^/  - /'
+      echo "Re-run /verify-tests and provide real evidence paths (render 證據 / 真實樣本結果)."
+    } >&2
+    return 1
+  fi
+
+  if [ -n "$msg" ] && printf '%s' "$msg" | grep -qEi '^fix([(:!]|$)'; then
+    local reg_ok
+    reg_ok=$(echo "$entry" | jq -r 'if ((.regression.test // "") != "") or ((.regression.skip_reason // "") != "") then "ok" else "no" end')
+    if [ "$reg_ok" != "ok" ]; then
+      {
+        echo ""
+        echo "[$label] BLOCKED — fix commit without regression backfill:"
+        echo "  add a regression test for the bug (marker .tests.regression.test),"
+        echo "  or record why it cannot be automated (.tests.regression.skip_reason)."
+      } >&2
+      return 1
+    fi
+  fi
+  return 0
+}

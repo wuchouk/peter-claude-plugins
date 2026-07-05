@@ -39,10 +39,20 @@ LIB="$(cd "$(dirname "$0")" && pwd)/../scripts/pipeline-lib.sh"
 # shellcheck source=/dev/null
 . "$LIB"
 
-if pipeline_eval_gate "commit" "pre-commit-pipeline"; then
-  exit 0
+if ! pipeline_eval_gate "commit" "pre-commit-pipeline"; then
+  echo "To save incomplete work without the pipeline, bypass with:" >&2
+  echo "  PIPELINE_SKIP=1 git commit -m \"...\"" >&2
+  exit 1
 fi
 
-echo "To save incomplete work without the pipeline, bypass with:" >&2
-echo "  PIPELINE_SKIP=1 git commit -m \"...\"" >&2
-exit 1
+# Evidence hard-check (dual-loop B-2) — runs only after the gate itself passed.
+# At pre-commit stage MSG_FILE is empty, so the fix-commit regression check is a
+# no-op there; the evidence_required check still applies.
+COMMIT_MSG_FIRSTLINE=$(head -1 "$MSG_FILE" 2>/dev/null || true)
+if ! pipeline_check_evidence "pre-commit-pipeline(git)" "$COMMIT_MSG_FIRSTLINE"; then
+  echo "To save incomplete work without the pipeline, bypass with:" >&2
+  echo "  PIPELINE_SKIP=1 git commit -m \"...\"" >&2
+  exit 1
+fi
+
+exit 0
