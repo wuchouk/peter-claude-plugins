@@ -50,9 +50,22 @@ LIB="$(cd "$(dirname "$0")" && pwd)/../scripts/pipeline-lib.sh"
 # shellcheck source=/dev/null
 . "$LIB"
 
-if pipeline_eval_gate "commit" "pre-commit-pipeline"; then
-  exit 0
+if ! pipeline_eval_gate "commit" "pre-commit-pipeline"; then
+  echo "If this is a WIP commit, prefix message with 'WIP:' to bypass." >&2
+  exit 2
 fi
 
-echo "If this is a WIP commit, prefix message with 'WIP:' to bypass." >&2
-exit 2
+# Evidence + fix-regression hard checks (dual-loop B-2). The git-native
+# commit-msg stage only fires in repos with a .husky/commit-msg anchor, so
+# this PreToolUse layer detects fix commits from the command string instead
+# (-m flag or heredoc body first line).
+MSG_GUESS=""
+if printf '%s' "$COMMAND" | grep -qE -- '-m[[:space:]]+["'\'']?fix([(:! ]|$)' \
+   || printf '%s\n' "$COMMAND" | grep -qE '^fix([(:! ]|$)'; then
+  MSG_GUESS="fix"
+fi
+if ! pipeline_check_evidence "pre-commit-pipeline" "$MSG_GUESS"; then
+  exit 2
+fi
+
+exit 0
