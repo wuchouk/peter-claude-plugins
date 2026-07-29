@@ -65,9 +65,10 @@ pipeline_eval_gate() {
   repo_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
   [ -z "$repo_root" ] && return 0  # not a git repo: let git itself decide
 
-  local staged_hash now_epoch state_file mark_cmd window
+  local staged_hash now_epoch state_file mark_cmd window cur_head
   staged_hash=$(cd "$repo_root" && bash "$_PIPELINE_LIB_DIR/compute-staged-hash.sh")
   now_epoch=$(date +%s)
+  cur_head=$(cd "$repo_root" && git rev-parse HEAD 2>/dev/null || echo "no-head")
   state_file="$repo_root/.claude/pipeline-state.json"
   mark_cmd="bash ~/peter-claude-plugins/plugins/pre-commit-pipeline/scripts/pipeline-mark-done.sh"
   window=$(pipeline_batch_window)
@@ -80,7 +81,7 @@ pipeline_eval_gate() {
   local state="{}"
   [ -f "$state_file" ] && state=$(cat "$state_file")
 
-  local step entry mhash mtime mepoch age
+  local step entry mhash mtime mfirst mfhead mepoch mfepoch tick_epoch age
   for step in "${required[@]}"; do
     entry=$(echo "$state" | jq -c --arg s "$step" '.[$s] // null')
     if [ "$entry" = "null" ]; then
@@ -88,18 +89,46 @@ pipeline_eval_gate() {
     fi
     mhash=$(echo "$entry" | jq -r '.staged_hash // ""')
     mtime=$(echo "$entry" | jq -r '.done_at // .verified_at // ""')
+    mfirst=$(echo "$entry" | jq -r '.first_marked_at // ""')
+    mfhead=$(echo "$entry" | jq -r '.first_marked_head // ""')
     if [ "$mhash" != "$staged_hash" ]; then
       stale_hash+=("$step"); continue
     fi
-    if [ -n "$mtime" ]; then
-      mepoch=$(_pipeline_iso_to_epoch "$mtime")
-      fresh_epochs+=("$mepoch")
-      age=$((now_epoch - mepoch))
-      [ "$age" -gt 86400 ] && stale_time+=("$step")
+    # An entry carrying only a matching staged_hash — no done_at, no verified_at
+    # — used to satisfy the gate: not missing, not stale, and contributing no
+    # timestamp to the batch check. That made a hand-written state file enough
+    # to clear the whole pipeline. Treat a timestampless entry as absent.
+    if [ -z "$mtime" ]; then
+      missing+=("$step"); continue
     fi
+    mepoch=$(_pipeline_iso_to_epoch "$mtime")
+    age=$((now_epoch - mepoch))
+    [ "$age" -gt 86400 ] && stale_time+=("$step")
+    # Batch-tick reads the FIRST tick, not the latest one. Re-marking (which a
+    # staged-diff change after the pipeline forces — review fixes something, a
+    # TODO gets logged) necessarily lands every done_at in the same second, so
+    # judging on done_at flags the most thorough runs. first_marked_at still
+    # holds when each step genuinely finished. Markers predating this field fall
+    # back to done_at, keeping the old behaviour.
+    #
+    # Three ways a first_marked_at is refused and done_at read instead, all of
+    # them cases where trusting it would widen the spread and wave a batch
+    # through: its recorded HEAD is not the current one (the timestamp belongs
+    # to a round that already ended in a commit — checked here as well as in
+    # pipeline-mark-done.sh, so a hand-written state file cannot claim an old
+    # round either); it does not parse (epoch 0); or it sits in the future,
+    # which would otherwise never age out.
+    tick_epoch=$mepoch
+    if [ -n "$mfirst" ] && [ "$mfhead" = "$cur_head" ]; then
+      mfepoch=$(_pipeline_iso_to_epoch "$mfirst")
+      if [ "$mfepoch" -gt 0 ] && [ "$mfepoch" -le "$now_epoch" ]; then
+        tick_epoch=$mfepoch
+      fi
+    fi
+    fresh_epochs+=("$tick_epoch")
   done
 
-  # C — batch-tick detection: 2+ fresh markers whose done_at spread <= window
+  # C — batch-tick detection: 2+ fresh markers first ticked within <= window
   # cannot reflect a real run (a genuine /review alone takes minutes).
   local batch_gamed=0 min_e max_e e
   if [ "${#fresh_epochs[@]}" -ge 2 ]; then
@@ -124,8 +153,10 @@ pipeline_eval_gate() {
     echo "  staged_hash: ${staged_hash:0:12}..."
     echo ""
     if [ "$batch_gamed" -eq 1 ]; then
-      echo "Suspected batch-tick (markers written within ${window}s of each other — a real"
+      echo "Suspected batch-tick (steps FIRST marked within ${window}s of each other — a real"
       echo "review/simplify cannot complete that fast). Run the steps for real, then mark."
+      echo "(Re-marking after the staged diff changed is fine — that keeps each step's"
+      echo "original first_marked_at, so it does not trip this check.)"
       echo ""
     fi
     if [ "${#missing[@]}" -gt 0 ]; then
