@@ -162,6 +162,77 @@ out=$(gate_out)
 [[ "$out" == *"BLOCKED"* ]] && pass "無時間戳的 marker → 擋下" || fail "無時間戳 marker 通過了 gate: $out"
 
 echo ""
+echo "=== Test 12-19: 非-husky repo 的 git hook installer ==="
+# 這幾個要各自獨立的 repo（安裝狀態不同），所以不用上面那個共用工作區。
+INS="$PLUGIN/scripts/install-git-hook.sh"
+ID="/tmp/pipeline-installer-$$"
+mkrepo() { mkdir -p "$ID/$1" && cd "$ID/$1" && git init -q . && git config user.email t@t && git config user.name t; }
+
+# 12 — 全新 repo：安裝 → 重複安裝要 idempotent → 真的擋得住未跑 pipeline 的 commit
+mkrepo plain && mkdir -p .claude && echo x > a.txt && git add a.txt
+bash "$INS" >/dev/null
+[ -x .git/hooks/pre-commit ] && pass "installer 裝上 pre-commit hook" || fail "hook 沒被建立"
+out=$(bash "$INS" 2>&1 || true)
+[[ "$out" == *"已經安裝過"* ]] && pass "重複安裝 idempotent" || fail "重複安裝行為不符: $out"
+git commit -q -m "feat: x" 2>/dev/null && fail "未跑 pipeline 卻 commit 成功" || pass "git 層擋下未跑 pipeline 的 commit"
+PIPELINE_SKIP=1 git commit -q -m "feat: x" 2>/dev/null && pass "PIPELINE_SKIP=1 放行" || fail "PIPELINE_SKIP 沒放行"
+
+# 13 — uninstall 收得乾淨
+bash "$INS" --uninstall >/dev/null
+[ -f .git/hooks/pre-commit ] && fail "uninstall 後 hook 還在" || pass "uninstall 移除乾淨"
+
+# 14 — 既有 hook 絕不覆蓋（靜默蓋掉別人的 hook 比不裝還糟）
+mkrepo existing && mkdir -p .claude .git/hooks
+printf '#!/bin/sh\necho "someone elses hook"\n' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+rc=0; err=$(bash "$INS" 2>&1 >/dev/null) || rc=$?
+grep -q "someone elses hook" .git/hooks/pre-commit && pass "既有 hook 內容未被動過" || fail "既有 hook 被覆蓋了"
+[ "$rc" != "0" ] && pass "偵測到既有 hook 時以非 0 退出" || fail "應該以非 0 退出"
+[[ "$err" == *"要納管的話"* ]] && pass "印出手動合併指引" || fail "沒有指引: $err"
+
+# 15 — husky repo 且有 user hook：已被 ~/.config/husky/init.sh 涵蓋，裝了會跑兩遍
+mkrepo husky && mkdir -p .claude .husky && touch .husky/pre-commit
+out=$(bash "$INS" 2>&1 || true)
+[[ "$out" == *"已由"* ]] && pass "husky repo（有 user hook）正確跳過" || fail "husky repo 沒跳過: $out"
+[ -f .git/hooks/pre-commit ] && fail "husky repo 不該被裝 hook" || pass "husky repo 未安裝 hook"
+
+# 16 — 有 .husky/ 但沒有 user hook：husky loader 在該 hook 沒有 user 檔時會提前
+#      結束、根本不 source 全域 init，所以這種 repo 其實沒被涵蓋，必須安裝。
+#      只看目錄存在會誤判成「已涵蓋」而讓它裸奔。
+mkrepo husky_empty && mkdir -p .claude .husky
+out=$(bash "$INS" 2>&1 || true)
+{ [[ "$out" == *"仍需安裝"* ]] && [ -x .git/hooks/pre-commit ]; } \
+  && pass "有 .husky/ 但無 user hook → 判定未涵蓋並安裝" || fail "誤判為已涵蓋: $out"
+
+# 17 — core.hooksPath：git 只從那裡讀 hook，寫到 .git/hooks 等於白裝
+mkrepo hookspath && mkdir -p .claude myhooks && git config core.hooksPath myhooks
+bash "$INS" >/dev/null 2>&1
+[ -x myhooks/pre-commit ] && pass "安裝到 core.hooksPath 指定的目錄" || fail "沒裝進 hooksPath"
+[ -f .git/hooks/pre-commit ] && fail "誤裝進 .git/hooks" || pass "未誤裝進 .git/hooks"
+echo x > a.txt && git add a.txt
+git commit -q -m "feat: x" 2>/dev/null && fail "hooksPath 情境下沒擋住" || pass "hooksPath 情境下端到端擋住"
+
+# 18 — 標記碰撞：他人的 hook 剛好含有本工具的標記字串。靠標記判斷所有權會
+#      (a) install 誤報已安裝而實際沒有 guard、(b) uninstall 刪掉別人的檔案。
+mkrepo collide && mkdir -p .claude .git/hooks
+printf '#!/bin/sh\n# pre-commit-pipeline gate\necho "actually someone elses"\n' > .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
+out=$(bash "$INS" 2>&1 >/dev/null || true)
+[[ "$out" == *"不是本工具寫的內容"* ]] && pass "標記碰撞時 install 仍拒絕" || fail "install 誤判: $out"
+out=$(bash "$INS" --uninstall 2>&1 >/dev/null || true)
+grep -q "actually someone elses" .git/hooks/pre-commit \
+  && pass "標記碰撞時 uninstall 不刪他人 hook" || fail "他人 hook 被刪除"
+
+# 19 — guard 失蹤時必須 fail closed。一個靜默消失的 gate 比會抱怨的危險得多。
+mkrepo failclosed && mkdir -p .claude && bash "$INS" >/dev/null 2>&1
+grep -q '\$HOME' .git/hooks/pre-commit && fail "stub 內留了 \$HOME（換 HOME 就找不到 guard）" \
+  || pass "stub 內寫死絕對路徑"
+sed -i '' 's#^_g=.*#_g="/nonexistent/guard.sh"#' .git/hooks/pre-commit
+echo x > a.txt && git add a.txt
+git commit -q -m "feat: x" 2>/dev/null && fail "guard 缺失卻放行（fail open）" || pass "guard 缺失時擋下（fail closed）"
+
+cd "$D"
+
+echo ""
 echo "=== All Phase 2 tests passed ✓ ==="
 echo "Plugin location: $PLUGIN"
 echo "Test workspace: $D (you can /opt/homebrew/opt/trash/bin/trash it now)"
