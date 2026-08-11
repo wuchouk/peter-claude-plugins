@@ -43,6 +43,18 @@ if printf '%s' "$COMMAND" | grep -qE -- "$PATTERN_M" \
   exit 0
 fi
 
+# Resolve the repo the command actually targets, not just the session cwd.
+# Agents overwhelmingly write `cd <repo> && git commit ...`; evaluating the
+# session cwd's repo instead gated the WRONG repo (observed: a commit into a
+# plugin repo blocked by the home directory repo's stale pipeline state).
+# Only a leading `cd <path> &&`/`;` prefix is parsed — anything fancier falls
+# back to cwd, which is the pre-existing behaviour.
+TARGET_DIR=$(printf '%s' "$COMMAND" | sed -nE \
+  's/^[[:space:]]*cd[[:space:]]+("([^"]*)"|'\''([^'\'']*)'\''|([^ ;&|]+))[[:space:]]*(&&|;).*/\2\3\4/p' | head -1)
+if [ -n "$TARGET_DIR" ] && [ -d "$TARGET_DIR" ]; then
+  cd "$TARGET_DIR" || true
+fi
+
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || true)
 [ -z "$REPO_ROOT" ] && exit 0   # not a git repo — let git fail naturally
 
