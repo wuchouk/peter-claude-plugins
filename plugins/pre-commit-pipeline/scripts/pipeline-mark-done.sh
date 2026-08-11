@@ -9,6 +9,9 @@ if [ -z "$STEP" ]; then
   cat >&2 <<EOF
 Usage: pipeline-mark-done.sh <step>
   step: simplify | review | verify-tests | document-release
+       regression --test "<test path / case>" | --skip "<reason>"
+         (fix commits: writes .tests.regression.test / .skip_reason, the
+          fields the fix-without-regression gate reads)
 EOF
   exit 1
 fi
@@ -17,6 +20,34 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 . "$SCRIPT_DIR/pipeline-lib.sh"
+
+# `regression` — the fix-commit regression-backfill fields. These previously
+# had NO CLI: the gate demanded .tests.regression.test but nothing could write
+# it, so agents reverse-engineered pipeline-lib.sh and hand-edited the state
+# JSON with python (twice in the 2026-08 week audit). Not a gate step — no
+# hash / timestamps involved; it annotates the existing tests entry.
+if [ "$STEP" = "regression" ]; then
+  MODE="${2:-}"
+  VAL="${3:-}"
+  if { [ "$MODE" != "--test" ] && [ "$MODE" != "--skip" ]; } || [ -z "$VAL" ]; then
+    echo "Usage: pipeline-mark-done.sh regression --test \"<test path / case>\" | --skip \"<reason>\"" >&2
+    exit 1
+  fi
+  REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || true)
+  if [ -z "$REPO_ROOT" ]; then
+    echo "Not in a git repo — marker not written" >&2
+    exit 1
+  fi
+  STATE_FILE="$REPO_ROOT/.claude/pipeline-state.json"
+  mkdir -p "$REPO_ROOT/.claude"
+  STATE='{}'
+  [ -f "$STATE_FILE" ] && STATE=$(cat "$STATE_FILE")
+  FIELD="test"
+  [ "$MODE" = "--skip" ] && FIELD="skip_reason"
+  echo "$STATE" | jq --arg v "$VAL" ".tests.regression.${FIELD} = \$v" > "$STATE_FILE"
+  echo "✓ pipeline-mark-done regression — .tests.regression.${FIELD} set"
+  exit 0
+fi
 
 KEY="$(pipeline_resolve_alias "$STEP")"
 if [ -z "$KEY" ]; then
@@ -29,6 +60,32 @@ REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || true)
 if [ -z "$REPO_ROOT" ]; then
   echo "Not in a git repo — marker not written" >&2
   exit 1
+fi
+
+# Stabilize the staged diff BEFORE hashing. The repo's pre-commit formatter
+# (lint-staged / prettier) rewrites staged files DURING `git commit`, changing
+# the staged hash mid-flight and invalidating every marker written here — the
+# 2026-08 week audit counted 6/6 stale-hash blocks caused exactly this way.
+# Running the same formatter now makes the commit-time pass a no-op, so the
+# hash recorded below still matches when the gate re-checks it at commit time.
+# Opt out with PIPELINE_NO_FORMAT=1.
+if [ "${PIPELINE_NO_FORMAT:-}" != "1" ] && command -v npx >/dev/null 2>&1 \
+  && [ -n "$(git diff --cached --name-only 2>/dev/null)" ]; then
+  HAS_LS_CONFIG=0
+  for f in .lintstagedrc .lintstagedrc.json .lintstagedrc.js .lintstagedrc.cjs \
+    .lintstagedrc.mjs .lintstagedrc.yaml .lintstagedrc.yml \
+    lint-staged.config.js lint-staged.config.cjs lint-staged.config.mjs; do
+    [ -f "$REPO_ROOT/$f" ] && HAS_LS_CONFIG=1 && break
+  done
+  if [ "$HAS_LS_CONFIG" -eq 0 ] && [ -f "$REPO_ROOT/package.json" ] \
+    && jq -e '."lint-staged" // empty' "$REPO_ROOT/package.json" >/dev/null 2>&1; then
+    HAS_LS_CONFIG=1
+  fi
+  if [ "$HAS_LS_CONFIG" -eq 1 ]; then
+    if ! (cd "$REPO_ROOT" && npx --no-install lint-staged >/dev/null 2>&1); then
+      echo "note: pre-format via lint-staged failed/unavailable — the hash below may go stale if the commit-time formatter changes files" >&2
+    fi
+  fi
 fi
 
 STAGED_HASH=$(bash "$SCRIPT_DIR/compute-staged-hash.sh")

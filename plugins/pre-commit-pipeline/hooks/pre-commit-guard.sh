@@ -43,14 +43,35 @@ if printf '%s' "$COMMAND" | grep -qE -- "$PATTERN_M" \
   exit 0
 fi
 
+# Resolve the repo the command actually targets, not just the session cwd.
+# Agents overwhelmingly write `cd <repo> && git commit ...`; evaluating the
+# session cwd's repo instead gated the WRONG repo (observed: a commit into a
+# plugin repo blocked by the home directory repo's stale pipeline state).
+# Only a leading `cd <path> &&`/`;` prefix is parsed — anything fancier falls
+# back to cwd, which is the pre-existing behaviour.
+TARGET_DIR=$(printf '%s' "$COMMAND" | sed -nE \
+  's/^[[:space:]]*cd[[:space:]]+("([^"]*)"|'\''([^'\'']*)'\''|([^ ;&|]+))[[:space:]]*(&&|;).*/\2\3\4/p' | head -1)
+if [ -n "$TARGET_DIR" ] && [ -d "$TARGET_DIR" ]; then
+  cd "$TARGET_DIR" || true
+fi
+
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || true)
 [ -z "$REPO_ROOT" ] && exit 0   # not a git repo — let git fail naturally
+
+# Opt-in by convention (mirrors git-commit-msg-guard.sh): only guard repos that
+# participate in the pipeline — those with a .claude/ directory. Without this,
+# the PreToolUse layer gated EVERY git repo the session touched, including ones
+# the git-native layer deliberately leaves alone.
+[ -d "$REPO_ROOT/.claude" ] || exit 0
 
 LIB="$(cd "$(dirname "$0")" && pwd)/../scripts/pipeline-lib.sh"
 # shellcheck source=/dev/null
 . "$LIB"
 
 if ! pipeline_eval_gate "commit" "pre-commit-pipeline"; then
+  echo "NOTE: this hook blocks the ENTIRE command string before ANY of it runs — if this" >&2
+  echo "command bundled staging/marker steps ahead of 'git commit', those did NOT run." >&2
+  echo "Run them as their own command first, then run 'git commit' by itself." >&2
   echo "If this is a WIP commit, prefix message with 'WIP:' to bypass." >&2
   exit 2
 fi
