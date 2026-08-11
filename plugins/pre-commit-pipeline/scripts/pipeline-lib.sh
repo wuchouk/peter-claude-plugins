@@ -130,8 +130,17 @@ pipeline_eval_gate() {
 
   # C — batch-tick detection: 2+ fresh markers first ticked within <= window
   # cannot reflect a real run (a genuine /review alone takes minutes).
+  #
+  # Exempt: docs-only staged diffs. The 2026-08 week audit found 6/6 batch-tick
+  # blocks were false positives, clustered on INDEX.md / ADR / TODO amends where
+  # re-ticking all markers back-to-back is the legitimate flow — a docs line
+  # needs no multi-minute review, and the real anti-gaming value lies on code.
+  local docs_only=0
+  if ! (cd "$repo_root" && git diff --cached --name-only 2>/dev/null) | grep -qvE '^docs/|\.md$'; then
+    docs_only=1
+  fi
   local batch_gamed=0 min_e max_e e
-  if [ "${#fresh_epochs[@]}" -ge 2 ]; then
+  if [ "${#fresh_epochs[@]}" -ge 2 ] && [ "$docs_only" -eq 0 ]; then
     min_e=${fresh_epochs[0]}; max_e=${fresh_epochs[0]}
     for e in "${fresh_epochs[@]}"; do
       [ "$e" -lt "$min_e" ] && min_e=$e
@@ -156,7 +165,9 @@ pipeline_eval_gate() {
       echo "Suspected batch-tick (steps FIRST marked within ${window}s of each other — a real"
       echo "review/simplify cannot complete that fast). Run the steps for real, then mark."
       echo "(Re-marking after the staged diff changed is fine — that keeps each step's"
-      echo "original first_marked_at, so it does not trip this check.)"
+      echo "original first_marked_at, so it does not trip this check. To avoid it entirely,"
+      echo "mark each step RIGHT AFTER it completes instead of batching the ticks at commit"
+      echo "time. Docs-only staged diffs are exempt from this check.)"
       echo ""
     fi
     if [ "${#missing[@]}" -gt 0 ]; then
@@ -167,6 +178,9 @@ pipeline_eval_gate() {
     if [ "${#stale_hash[@]}" -gt 0 ]; then
       echo "Stale markers (staged diff changed since these ran):"
       for step in "${stale_hash[@]}"; do echo "  - re-run $(pipeline_step_help "$step" "$mark_cmd")"; done
+      echo "(A stale hash DURING a commit usually means the pre-commit formatter rewrote"
+      echo "staged files. pipeline-mark-done.sh now runs the formatter before hashing, so"
+      echo "re-running the mark commands above stabilizes the hash — then commit again.)"
       echo ""
     fi
   } >&2

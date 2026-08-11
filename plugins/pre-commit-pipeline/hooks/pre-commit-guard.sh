@@ -46,11 +46,20 @@ fi
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || true)
 [ -z "$REPO_ROOT" ] && exit 0   # not a git repo — let git fail naturally
 
+# Opt-in by convention (mirrors git-commit-msg-guard.sh): only guard repos that
+# participate in the pipeline — those with a .claude/ directory. Without this,
+# the PreToolUse layer gated EVERY git repo the session touched, including ones
+# the git-native layer deliberately leaves alone.
+[ -d "$REPO_ROOT/.claude" ] || exit 0
+
 LIB="$(cd "$(dirname "$0")" && pwd)/../scripts/pipeline-lib.sh"
 # shellcheck source=/dev/null
 . "$LIB"
 
 if ! pipeline_eval_gate "commit" "pre-commit-pipeline"; then
+  echo "NOTE: this hook blocks the ENTIRE command string before ANY of it runs — if this" >&2
+  echo "command bundled staging/marker steps ahead of 'git commit', those did NOT run." >&2
+  echo "Run them as their own command first, then run 'git commit' by itself." >&2
   echo "If this is a WIP commit, prefix message with 'WIP:' to bypass." >&2
   exit 2
 fi
