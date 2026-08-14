@@ -4,6 +4,28 @@
 # 乾淨 repo 或 marker 新 → 完全靜默
 set -euo pipefail
 
+# --- plugin cache drift 檢查 -------------------------------------------------
+# Claude 載入的是 cache 副本（CLAUDE_PLUGIN_ROOT），真本在 peter-claude-plugins。
+# 改了真本卻沒重裝 plugin 時，新規則對 agent 等於不存在——2026-08-14 就踩過：
+# cache 的 verify-tests SKILL.md 缺整段「Evidence 規則」，agent 不知道要寫
+# evidence_required，但 guard 照擋，變成「被擋了卻不知道該補什麼」。
+# 比內容不比版本號：那次兩邊 plugin.json 都是 0.1.0，版本比對抓不到。
+# 這段刻意放在 git repo 檢查之前——drift 跟 repo 乾不乾淨無關。
+SRC_ROOT="$HOME/peter-claude-plugins/plugins/pre-commit-pipeline"
+CACHE_ROOT="${CLAUDE_PLUGIN_ROOT:-}"
+if [ -n "$CACHE_ROOT" ] && [ -d "$SRC_ROOT" ] && [ "$CACHE_ROOT" != "$SRC_ROOT" ]; then
+  DRIFT=$(diff -rq "$SRC_ROOT" "$CACHE_ROOT" --exclude='.in_use' 2>/dev/null || true)
+  if [ -n "$DRIFT" ]; then
+    {
+      echo "[pre-commit-pipeline] ⚠ plugin cache drift — Claude 讀的是舊副本，真本的新規則不會生效"
+      echo "$DRIFT" | sed 's/^/    /' | head -10
+      echo "  修復：rsync -a --exclude='.git' --exclude='.in_use' \"$SRC_ROOT/\" \"$CACHE_ROOT/\""
+      echo "  （或用 /plugin 重裝 pre-commit-pipeline）"
+    } >&2
+  fi
+fi
+# ----------------------------------------------------------------------------
+
 # 不在 git repo → 靜默
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || true)
 if [ -z "$REPO_ROOT" ]; then

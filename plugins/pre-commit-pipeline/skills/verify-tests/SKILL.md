@@ -135,6 +135,10 @@ Decisions array 範例：
    render 證據 = 真實 render 過的具體產物路徑：跑過的 Playwright spec（附 pass 輸出）或 walkthrough 截圖檔路徑。
 2. staged diff 有檔案 match `layers.real_sample_pipeline.paths` → `evidence_required` 加 `"real_sample"`。
    real_sample 證據 = runner 對 corpus 的執行結果摘要路徑（測試報告或輸出檔）。
+   跑哪一支 runner 用反查：schema v3 的 `runners[]` 逐支比對 `covers` glob，都沒命中就取 `default: true` 那支；
+   schema v2 的單數 `runner: '<指令>'` 仍相容（等價於單一免費 runner）。
+   命中多支時 `sum(cost_usd)` 超過 `budget_usd`（未設視為 US$1）→ 只跑 `cost_usd: 0` 的，並註明哪幾支因預算沒跑。
+   **判定綠紅不要只看 exit code** —— 多數 eval runner 分數再爛也 exit 0，要比對它印出的指標。
 3. commit 訊息將以 `fix` 開頭（conventional commit）→ marker 必須含 `regression`：
    `{"test": "<新增/更新的 regression test 路徑>"}` 或 `{"skip_reason": "<為何無法自動化>"}`。
 
