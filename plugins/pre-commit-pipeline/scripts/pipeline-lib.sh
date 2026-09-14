@@ -203,21 +203,101 @@ pipeline_check_evidence() {
   entry=$(jq -c '.tests // null' "$state_file" 2>/dev/null || echo null)
   [ "$entry" = "null" ] && return 0
 
-  local missing_evidence
-  missing_evidence=$(echo "$entry" | jq -r '. as $t | ($t.evidence_required // [])[] | select((($t.evidence // {})[.] // "") == "")')
-  if [ -n "$missing_evidence" ]; then
+  # Evidence rules (2026-09-14 rewrite — the previous check only verified that
+  # the field was non-empty, and a mock-only run pasted a plausible path):
+  #   * every required kind must point at an existing non-empty file or
+  #     directory (relative to the repo root, or absolute);
+  #   * `live` (external-source probe JSON) is REQUIRED whenever a staged file
+  #     matches docs/verification/config.yaml layers.external_sources.paths —
+  #     derived here from the staged diff, never trusted from the marker — and
+  #     the JSON must record pass=true with source/id and be newer than every
+  #     matching staged file. A decisions[] entry {type:"live",status:"skipped",
+  #     reason} waives it (printed as a NOTE so the reviewer sees it).
+  local required
+  required=$(jq -r 'if (.evidence_required|type) == "array" then .evidence_required[] else empty end' <<< "$entry")
+
+  local config="$repo_root/docs/verification/config.yaml" live_hits=""
+  if [ -f "$config" ] && grep -q 'external_sources' "$config"; then
+    local py
+    py=$(command -v /usr/bin/python3 || command -v python3 || true)
+    [ -n "$py" ] && live_hits=$( (cd "$repo_root" && git diff --cached --name-only 2>/dev/null) | "$py" -c '
+import re, sys
+try:
+    import yaml
+except ImportError:
+    sys.exit(0)
+layer = (((yaml.safe_load(open(sys.argv[1], encoding="utf-8")) or {}).get("layers") or {}).get("external_sources") or {})
+if not layer.get("enabled") or not layer.get("paths"):
+    sys.exit(0)
+def rx(g):
+    g = re.escape(g)
+    for pat, rep in (("\\*\\*/", "(?:.*/)?"), ("\\*\\*", ".*"), ("\\*", "[^/]*"), ("\\?", "[^/]")):
+        g = g.replace(pat, rep)
+    return re.compile("^" + g + "$")
+pats = [rx(g) for g in layer["paths"]]
+for line in sys.stdin.read().splitlines():
+    if line and any(p.match(line) for p in pats):
+        print(line)
+' "$config" 2>/dev/null || true)
+  fi
+  if [ -n "$live_hits" ]; then
+    local live_skip
+    live_skip=$(jq -r '[(.decisions // [])[] | select(.type == "live" and .status == "skipped") | .reason // "no reason given"] | first // ""' <<< "$entry")
+    if [ -n "$live_skip" ] && [ "$(jq -r '(.evidence // {}).live // ""' <<< "$entry")" = "" ]; then
+      echo "[$label] NOTE — staged files reach external sources but the live probe was skipped: $live_skip" >&2
+    else
+      printf '%s\n' "$required" | grep -qx live || required="$required"$'\n'"live"
+    fi
+  fi
+
+  local bad=() kind evidence_path resolved verdict f
+  while IFS=$'\t' read -r kind evidence_path; do
+    [ -n "$kind" ] || continue
+    if [ -z "$evidence_path" ]; then
+      if [ "$kind" = "live" ]; then
+        bad+=("  - live: missing — staged files reach external sources:")
+        while IFS= read -r f; do [ -n "$f" ] && bad+=("        $f"); done <<< "$live_hits"
+        bad+=("    run the repo probe with the bug's own identifier (docs/verification/config.yaml layers.external_sources.runner) and record its JSON path in .tests.evidence.live, or add a decisions[] entry {type:\"live\",status:\"skipped\",reason}")
+      else
+        bad+=("  - $kind: missing")
+      fi
+      continue
+    fi
+    case "$evidence_path" in /*) resolved="$evidence_path" ;; *) resolved="$repo_root/$evidence_path" ;; esac
+    if [ -d "$resolved" ]; then
+      [ -n "$(ls -A "$resolved" 2>/dev/null)" ] || bad+=("  - $kind: $resolved (directory is empty)")
+      continue
+    fi
+    if [ ! -f "$resolved" ] || [ ! -s "$resolved" ]; then
+      bad+=("  - $kind: $resolved (file missing or empty; relative paths resolve from the repo root)")
+      continue
+    fi
+    [ "$kind" = "live" ] || continue
+    verdict=$(jq -r 'if type != "object" then "not a JSON object" elif .pass != true then "pass is not true — the probe did not get the expected result" elif ((.id // "") == "" or (.source // "") == "") then "missing source/id" else "ok" end' "$resolved" 2>/dev/null || echo "not JSON")
+    if [ "$verdict" != "ok" ]; then
+      bad+=("  - live: $resolved ($verdict)")
+      continue
+    fi
+    local stale=""
+    while IFS= read -r f; do
+      [ -n "$f" ] && [ -e "$repo_root/$f" ] && [ "$repo_root/$f" -nt "$resolved" ] && stale="$stale $f"
+    done <<< "$live_hits"
+    [ -z "$stale" ] || bad+=("  - live: $resolved is older than staged file(s):$stale — rerun the probe after the last edit")
+  done < <(jq -r --arg req "$required" '($req | split("\n") | map(select(. != ""))) as $kinds | .evidence // {} | . as $ev | $kinds[] | [., ($ev[.] // "")] | @tsv' <<< "$entry")
+
+  if [ "${#bad[@]}" -gt 0 ]; then
     {
       echo ""
-      echo "[$label] BLOCKED — evidence missing for required kinds:"
-      echo "$missing_evidence" | sed 's/^/  - /'
-      echo "Re-run /verify-tests and provide real evidence paths (render 證據 / 真實樣本結果)."
+      echo "[$label] BLOCKED — evidence does not check out:"
+      printf '%s\n' "${bad[@]}"
+      echo "Evidence must be a real artifact produced by this change's verification (render 截圖 / runner 報告 / probe JSON), not a pasted path."
     } >&2
     return 1
   fi
 
   if [ -n "$msg" ] && printf '%s' "$msg" | grep -qEi '^fix([(:!]|$)'; then
     local reg_ok
-    reg_ok=$(echo "$entry" | jq -r 'if ((.regression.test // "") != "") or ((.regression.skip_reason // "") != "") then "ok" else "no" end')
+    reg_ok=$(jq -r 'if ((.regression.test // "") != "") or ((.regression.skip_reason // "") != "") then "ok" else "no" end' <<< "$entry")
     if [ "$reg_ok" != "ok" ]; then
       {
         echo ""

@@ -75,7 +75,7 @@ claude plugins install pre-commit-pipeline@peter-claude-plugins
 
 以下三種情況會拒絕採信 `first_marked_at`、退回讀 `done_at`：HEAD 對不上、時間解析不出來、時間落在未來（手改的未來時間永遠不會過期，等於永久後門）。超過 24 小時同樣重設，作為「一輪開著過夜」的兜底。沒有這兩個欄位的舊 marker 一律退回 `done_at`，行為與改動前相同。
 
-`tests` 專屬的三個欄位由 `/verify-tests` 寫入，並受 `pipeline_check_evidence()` 硬檢查（**會擋，不是慣例**）：`evidence_required` 是這次 diff 需要的證據種類（依 `docs/verification/config.yaml` 判定，例如改到 UI 就要 `render`）、`evidence` 是各種類對應的**真實產物路徑**、`regression` 則在 `fix` 開頭的 commit 上必填（`test` 指向回填的迴歸測試，或 `skip_reason` 說明為何無法自動化）。guard 只驗欄位非空，內容的誠實由寫的人負責 —— 填假路徑等同繞過 gate。
+`tests` 專屬的三個欄位由 `/verify-tests` 寫入，並受 `pipeline_check_evidence()` 硬檢查（**會擋，不是慣例**）：`evidence_required` 是這次 diff 需要的證據種類（依 `docs/verification/config.yaml` 判定，例如改到 UI 就要 `render`）、`evidence` 是各種類對應的**真實產物路徑**、`regression` 則在 `fix` 開頭的 commit 上必填（`test` 指向回填的迴歸測試，或 `skip_reason` 說明為何無法自動化）。guard 驗每個證據路徑是存在且非空的檔案或目錄；`live` 由 guard 自己從 staged diff 對 `layers.external_sources.paths` 推導（不信 marker 的 `evidence_required`），並驗 probe JSON 的 `pass: true` 與它比命中的 staged 檔案新；無法真連線時在 `decisions[]` 記一筆 `type: live, status: skipped` 附理由。內容是否真的對應這次改動仍由寫的人負責。
 
 ## 工作流程
 

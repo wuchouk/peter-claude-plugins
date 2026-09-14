@@ -139,7 +139,16 @@ Decisions array 範例：
    schema v2 的單數 `runner: '<指令>'` 仍相容（等價於單一免費 runner）。
    命中多支時由便宜到貴依序跑，累加到下一支會超過 `budget_usd`（未設視為 US$1）就停，並註明哪幾支因預算沒跑。
    **判定綠紅不要只看 exit code** —— 多數 eval runner 分數再爛也 exit 0，要比對它印出的指標。
-3. commit 訊息將以 `fix` 開頭（conventional commit）→ marker 必須含 `regression`：
+3. staged diff 有檔案 match `layers.external_sources.paths` → `evidence_required` 加 `"live"`。
+   live 證據 = repo 的外部來源 probe（`layers.external_sources.tool`，platform 是
+   `scripts/probe-external-source.ts`）對**這個 bug 自己的識別碼**跑出來的 JSON 路徑，
+   內容必須是 `pass: true`。mock 單元測試全綠、e2e（外部來源全被 stub）全綠都**不算**：
+   2026-09-14 一個 WIPO 修法就是這樣在 mock 下全綠、真打才發現 UA 被 403。
+   guard 會**自己**從 staged diff 比對這條 paths，命中就強制要 `evidence.live`，不看你有沒有宣告；
+   JSON 還必須比每個命中的 staged 檔案新（改完再跑一次 probe）。沒有網路或來源當機時，
+   在 `decisions[]` 加一筆 `{"type": "live", "status": "skipped", "reason": "<為什麼>"}`
+   （跟其他 skip 同一個位置；guard 會印 NOTE 放行），不要填舊的 JSON。
+4. commit 訊息將以 `fix` 開頭（conventional commit）→ marker 必須含 `regression`：
    `{"test": "<新增/更新的 regression test 路徑>"}` 或 `{"skip_reason": "<為何無法自動化>"}`。
 
 Marker payload 範例（在既有欄位之外新增）：
@@ -156,7 +165,7 @@ Marker payload 範例（在既有欄位之外新增）：
 }
 ```
 
-證據必須真實存在（guard 只驗欄位非空，誠實是你的責任——附假路徑等同繞過 gate）。
+證據必須真實存在：guard 會驗每個路徑是存在且非空的檔案或目錄；`live` 還會驗 JSON 內 `pass: true`、`source`/`id`，以及它比每個命中的 staged 檔案新。填假路徑、空檔或舊 JSON 都會被擋。
 無法提供時照舊走 `[s]` skip + 理由。
 
 ## Step 7 — 回報
