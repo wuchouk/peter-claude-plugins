@@ -12,6 +12,12 @@ Usage: pipeline-mark-done.sh <step>
        regression --test "<test path / case>" | --skip "<reason>"
          (fix commits: writes .tests.regression.test / .skip_reason, the
           fields the fix-without-regression gate reads)
+       repro --report <id> --path "<使用者描述/確認的重現路徑>" \
+             (--spec tests/e2e/<x>.spec.ts | --probe .context/scratch/probe/<x>.json) \
+             [--confirmed user|assumed]
+         (bug fixes that come from a problem report: the gate then requires
+          that spec to be new/modified in the staged diff, or that probe JSON
+          to be pass=true and fresher than the staged files — no skip)
 EOF
   exit 1
 fi
@@ -46,6 +52,50 @@ if [ "$STEP" = "regression" ]; then
   [ "$MODE" = "--skip" ] && FIELD="skip_reason"
   echo "$STATE" | jq --arg v "$VAL" ".tests.regression.${FIELD} = \$v" > "$STATE_FILE"
   echo "✓ pipeline-mark-done regression — .tests.regression.${FIELD} set"
+  exit 0
+fi
+
+# `repro` — a bug fix that answers a problem report must land with the
+# user-described path as a test: an e2e spec touched in this diff, or (for
+# external-source bugs) a live probe JSON. 2026-09-14: half of the period's
+# fix commits shipped with unit tests only, and the one that started this
+# gate had mocked away the very path the report described.
+if [ "$STEP" = "repro" ]; then
+  shift
+  REPORT="" RPATH="" SPEC="" PROBE="" CONFIRMED="assumed"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --report|--path|--spec|--probe|--confirmed)
+        [ $# -ge 2 ] || { echo "repro: $1 needs a value" >&2; exit 1; }
+        case "$1" in
+          --report) REPORT="$2" ;; --path) RPATH="$2" ;; --spec) SPEC="$2" ;;
+          --probe) PROBE="$2" ;; --confirmed) CONFIRMED="$2" ;;
+        esac
+        shift 2 ;;
+      *) echo "repro: unknown argument $1" >&2; exit 1 ;;
+    esac
+  done
+  if [ -z "$REPORT" ] || [ -z "$RPATH" ] || { [ -z "$SPEC" ] && [ -z "$PROBE" ]; }; then
+    echo "Usage: pipeline-mark-done.sh repro --report <id> --path \"<重現路徑>\" (--spec <e2e spec> | --probe <probe json>) [--confirmed user|assumed]" >&2
+    exit 1
+  fi
+  case "$CONFIRMED" in user|assumed) ;; *) echo "repro: --confirmed must be user or assumed" >&2; exit 1 ;; esac
+  REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || true)
+  [ -n "$REPO_ROOT" ] || { echo "Not in a git repo — marker not written" >&2; exit 1; }
+  STATE_FILE="$REPO_ROOT/.claude/pipeline-state.json"
+  mkdir -p "$REPO_ROOT/.claude"
+  STATE='{}'
+  [ -f "$STATE_FILE" ] && STATE=$(cat "$STATE_FILE")
+  # `head` binds the marker to this change: the gates enforce it only while
+  # that commit is an ancestor of HEAD and the spec has not been touched since
+  # (so a fix that already landed, or a later unrelated session, is never
+  # blocked by a stale marker). `regression.test` is set to the same artifact
+  # so the fix-regression rule cannot be satisfied with an unrelated string.
+  HEAD_NOW=$(git rev-parse HEAD 2>/dev/null || echo "")
+  echo "$STATE" | jq --arg r "$REPORT" --arg p "$RPATH" --arg s "$SPEC" --arg pr "$PROBE" --arg c "$CONFIRMED" --arg h "$HEAD_NOW" \
+    '.tests.repro = ({report_id: $r, path: $p, confirmed: $c, head: $h} + (if $s != "" then {spec: $s} else {} end) + (if $pr != "" then {probe: $pr} else {} end))
+     | .tests.regression = {test: (if $s != "" then $s else ("live probe " + $pr) end)}' > "$STATE_FILE"
+  echo "✓ pipeline-mark-done repro — .tests.repro set (report ${REPORT}, ${SPEC:+spec ${SPEC}}${PROBE:+probe ${PROBE}}, confirmed=${CONFIRMED})"
   exit 0
 fi
 

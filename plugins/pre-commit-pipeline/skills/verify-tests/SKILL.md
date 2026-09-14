@@ -148,7 +148,11 @@ Decisions array 範例：
    JSON 還必須比每個命中的 staged 檔案新（改完再跑一次 probe）。沒有網路或來源當機時，
    在 `decisions[]` 加一筆 `{"type": "live", "status": "skipped", "reason": "<為什麼>"}`
    （跟其他 skip 同一個位置；guard 會印 NOTE 放行），不要填舊的 JSON。
-4. commit 訊息將以 `fix` 開頭（conventional commit）→ marker 必須含 `regression`：
+4. 修的是**問題回報**（triage-report 已用 `pipeline-mark-done.sh repro` 寫入 `.tests.repro`）
+   且 commit 將以 `fix` 開頭 → `repro.spec` 必須是這次 staged diff 裡新增或修改的
+   `tests/e2e/*.spec.ts`（或 `repro.probe` 是改動後跑過、pass=true 的 live probe JSON）。
+   這條**沒有 skip**：回報的路徑做不成測試就回去跟使用者說，不要 commit。
+5. commit 訊息將以 `fix` 開頭（conventional commit）→ marker 必須含 `regression`：
    `{"test": "<新增/更新的 regression test 路徑>"}` 或 `{"skip_reason": "<為何無法自動化>"}`。
 
 Marker payload 範例（在既有欄位之外新增）：

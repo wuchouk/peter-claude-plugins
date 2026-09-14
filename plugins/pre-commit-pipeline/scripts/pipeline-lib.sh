@@ -295,6 +295,59 @@ for line in sys.stdin.read().splitlines():
     return 1
   fi
 
+  # A fix that answers a problem report (.tests.repro, written by
+  # `pipeline-mark-done.sh repro` from the triage-report skill) must carry the
+  # reported path as a test in THIS diff: the named e2e spec staged (new or
+  # modified), or a live probe JSON that passed after the last staged edit.
+  # There is deliberately no skip here — if the path cannot be automated the
+  # agent has to come back and say so instead of committing.
+  local repro_report repro_head
+  repro_report=$(jq -r '.repro.report_id // ""' <<< "$entry")
+  repro_head=$(jq -r '.repro.head // ""' <<< "$entry")
+  # Only a live marker counts: its head must be an ancestor of HEAD (same
+  # line of work). Commits after that head count as "this change" too, so a
+  # fix that was already committed — or a WIP commit before it — is not asked
+  # for the spec twice.
+  if [ -n "$repro_report" ] && [ -n "$repro_head" ] && ! (cd "$repo_root" && git merge-base --is-ancestor "$repro_head" HEAD 2>/dev/null); then
+    repro_report=""
+  fi
+  if [ -n "$repro_report" ] && [ -n "$msg" ] && printf '%s' "$msg" | grep -qEi '^fix([(:!]|$)'; then
+    local repro_spec repro_probe repro_bad="" repro_changed
+    repro_spec=$(jq -r '.repro.spec // ""' <<< "$entry")
+    repro_probe=$(jq -r '.repro.probe // ""' <<< "$entry")
+    repro_changed=$( (cd "$repo_root" && { git diff --cached --name-only; [ -n "$repro_head" ] && git diff --name-only "${repro_head}...HEAD"; } 2>/dev/null) | sort -u)
+    if [ -n "$repro_spec" ]; then
+      case "$repro_spec" in
+        tests/e2e/*.spec.ts) ;;
+        *) repro_bad="repro.spec must be a tests/e2e/*.spec.ts file, got: $repro_spec" ;;
+      esac
+      if [ -z "$repro_bad" ] && ! printf '%s\n' "$repro_changed" | grep -qxF "$repro_spec"; then
+        repro_bad="repro.spec $repro_spec is not new or modified since the report was taken up (staged diff or commits after ${repro_head:0:9}) — the reported path has to be covered by THIS change"
+      fi
+    elif [ -n "$repro_probe" ]; then
+      case "$repro_probe" in /*) resolved="$repro_probe" ;; *) resolved="$repo_root/$repro_probe" ;; esac
+      if [ ! -s "$resolved" ] || ! jq -e '.pass == true and (.id // "") != ""' "$resolved" >/dev/null 2>&1; then
+        repro_bad="repro.probe $repro_probe missing or not pass=true"
+      else
+        while IFS= read -r f; do
+          [ -n "$f" ] && [ -e "$repo_root/$f" ] && [ "$repo_root/$f" -nt "$resolved" ] && repro_bad="repro.probe $repro_probe is older than staged file $f — rerun the probe after the last edit"
+        done < <(cd "$repo_root" && git diff --cached --name-only 2>/dev/null)
+      fi
+    else
+      repro_bad="repro has neither spec nor probe"
+    fi
+    if [ -n "$repro_bad" ]; then
+      {
+        echo ""
+        echo "[$label] BLOCKED — fix for problem report ${repro_report} without its reproduction path as a test:"
+        echo "  $repro_bad"
+        echo "  path: $(jq -r '.repro.path // ""' <<< "$entry")"
+        echo "  Add/extend the e2e spec for that path (or rerun the live probe) and record it with: pipeline-mark-done.sh repro --report ${repro_report} --path \"...\" --spec <file>"
+      } >&2
+      return 1
+    fi
+  fi
+
   if [ -n "$msg" ] && printf '%s' "$msg" | grep -qEi '^fix([(:!]|$)'; then
     local reg_ok
     reg_ok=$(jq -r 'if ((.regression.test // "") != "") or ((.regression.skip_reason // "") != "") then "ok" else "no" end' <<< "$entry")
