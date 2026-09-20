@@ -141,6 +141,17 @@ fi
 STAGED_HASH=$(bash "$SCRIPT_DIR/compute-staged-hash.sh")
 NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
+# staged_tree — a snapshot of WHAT this step looked at, next to staged_hash's
+# "whether it is still the same". The hash alone can only say identical/not, so
+# a round-bound step (see `binding` in pipeline-steps.json) needs the tree to
+# measure how far the content moved after it ran. `git write-tree` only writes
+# objects out of the existing index; it does not touch the index or the working
+# tree. It fails on an unmerged index (mid-conflict), and then the field is
+# DELETED (not just skipped) below — leaving the previous round's tree next to
+# a fresh staged_hash would describe two different contents, and the gate would
+# measure drift against the wrong base instead of falling back to strict.
+STAGED_TREE=$(git write-tree 2>/dev/null || echo "")
+
 STATE_DIR="$REPO_ROOT/.claude"
 STATE_FILE="$STATE_DIR/pipeline-state.json"
 mkdir -p "$STATE_DIR"
@@ -183,7 +194,9 @@ fi
 # cap: a hand-written 25-hour-old timestamp now reaches the old gate and widens
 # its spread enough to clear the batch check. That is a bypass of a rule this
 # same change deletes, so it is accepted rather than carried forward.
-CUR_HEAD=$(git rev-parse HEAD 2>/dev/null || echo "no-head")
+# --verify: on an unborn branch plain `git rev-parse HEAD` prints "HEAD" to
+# stdout before failing, so the field would become "HEAD\nno-head".
+CUR_HEAD=$(git rev-parse --verify --quiet HEAD 2>/dev/null || echo "no-head")
 
 # Merge (preserve other keys in the entry like decisions[] for tests)
 NEW_STATE=$(echo "$STATE" | jq \
@@ -191,13 +204,16 @@ NEW_STATE=$(echo "$STATE" | jq \
   --arg done_at "$NOW" \
   --arg first_head "$CUR_HEAD" \
   --arg hash "$STAGED_HASH" \
+  --arg tree "$STAGED_TREE" \
   '.[$key] as $prev
    | .[$key] = (($prev // {}) + {
        done_at: $done_at,
        first_marked_at: (if ($prev.first_marked_head // "") == $first_head
                          then ($prev.first_marked_at // $done_at) else $done_at end),
        first_marked_head: $first_head,
-       staged_hash: $hash})')
+       staged_hash: $hash}
+      + (if $tree != "" then {staged_tree: $tree} else {} end))
+   | (if $tree == "" then del(.[$key].staged_tree) else . end)')
 
 echo "$NEW_STATE" > "$STATE_FILE"
 echo "✓ pipeline-mark-done $STEP — staged_hash=${STAGED_HASH:0:12}... at $NOW"

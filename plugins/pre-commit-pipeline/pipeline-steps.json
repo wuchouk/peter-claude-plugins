@@ -1,5 +1,9 @@
 {
   "_comment": "Single source of truth for pipeline gate steps. All guards + pipeline-mark-done.sh read this via pipeline-lib.sh. To add/remove a required gate step, edit ONLY this file.",
+  "_comment_order": "The gates arrays ARE the step order: a step's position decides who is downstream of it. Only a step with a later content-bound step in the same gate can be bound to the round instead of the content.",
+  "_comment_binding": "content (default, applies to anything not listed) = the marker's staged_hash must equal the current staged hash. round = the marker also counts when it was written in the SAME round (same HEAD, within 24h, has staged_tree, drift under round_drift) and some LATER content-bound step vouches for the final content. simplify is round-bound because review sits after it and does look at the final content; document_release / tidy_docs are last in gates.ship, so nobody is downstream of them and they stay content-bound.",
+  "_comment_drift": "round_drift caps how much content a round-bound step never saw: added lines between its staged_tree and the current staged content. limit = min(max(floor_lines, ratio_percent% of the staged diff), max_lines). Calibrated 2026-09-20 on real sessions: observed review-phase edits had a median of ~29 lines and a p90 of ~136, and the one 390-line case is exactly what should force a simplify re-run.",
+  "_comment_exclude": "exclude_paths are git pathspecs left out of both drift numbers, for files a house rule says to update in the same commit as the code (the TODO ledger, the verification docs) — counting them would let the ledger itself force a simplify re-run. Keep it narrow: a blanket *.md was the first version and it blinded the gate to repos whose product IS markdown (this one: SKILL.md, plugin READMEs).",
   "gates": {
     "commit": ["simplify", "review", "tests"],
     "ship": ["simplify", "review", "tests", "document_release", "tidy_docs"]
@@ -20,5 +24,14 @@
     "tests": "/verify-tests (writes its own marker)",
     "document_release": "/document-release, then: {MARK} document-release",
     "tidy_docs": "/tidy-docs, then: {MARK} tidy-docs"
+  },
+  "binding": {
+    "simplify": "round"
+  },
+  "round_drift": {
+    "floor_lines": 40,
+    "ratio_percent": 30,
+    "max_lines": 200,
+    "exclude_paths": ["docs/**", "TODOS.md", "tasks/todo.md", "CHANGELOG.md"]
   }
 }

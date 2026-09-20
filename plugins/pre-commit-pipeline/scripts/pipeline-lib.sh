@@ -6,6 +6,8 @@
 #   pipeline_gate_steps <gate>        → space-separated canonical step keys for a gate (commit|ship)
 #   pipeline_resolve_alias <input>    → canonical step key for an alias, or "" if unknown
 #   pipeline_step_help <step> <mark>  → human help line ({MARK} replaced by <mark>), or "" if none
+#   pipeline_step_binding <step>      → "round" or "content" (default)
+#   pipeline_round_drift              → "<floor_lines> <ratio_percent> <max_lines>"
 #
 # Resolution of the JSON path: <plugin_root>/pipeline-steps.json, where plugin_root
 # is two levels up from this script (scripts/ -> plugin root).
@@ -39,16 +41,87 @@ pipeline_step_help() {
   jq -r --arg s "$step" --arg m "$mark" '(.help[$s] // "") | gsub("\\{MARK\\}"; $m)' "$PIPELINE_STEPS_JSON"
 }
 
+# "round" or "content". Anything the JSON does not list is content-bound, so a
+# gate step added later is strict until someone deliberately loosens it.
+pipeline_step_binding() {
+  local step="$1"
+  _pipeline_require_json || return 1
+  jq -r --arg s "$step" '(.binding[$s] // "content")' "$PIPELINE_STEPS_JSON"
+}
+
+# Always three integers. A hand-edited "30.5" or "abc" would otherwise reach
+# bash arithmetic and take the whole gate down with a syntax error, so anything
+# that is not a whole number falls back to the default.
+pipeline_round_drift() {
+  _pipeline_require_json || return 1
+  jq -r '(.round_drift // {}) as $d
+         | def int(v; fallback): (v | tostring | test("^[0-9]+$")) as $ok
+             | if $ok then (v | tonumber | floor) else fallback end;
+           "\(int($d.floor_lines; 40)) \(int($d.ratio_percent; 30)) \(int($d.max_lines; 200))"' \
+    "$PIPELINE_STEPS_JSON"
+}
+
 # ISO-8601 (UTC, "...Z") → epoch seconds; echoes 0 on parse failure.
 _pipeline_iso_to_epoch() {
   date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$1" +%s 2>/dev/null || echo 0
 }
 
+# Paths left out of both drift numbers, as git pathspecs. Defined in
+# pipeline-steps.json so the knob lives with every other gate knob — the first
+# version hardcoded `*.md` here, which blinded the gate to any repo whose
+# product IS markdown (this one: SKILL.md, the plugin READMEs). The defaults
+# below only apply when the JSON omits the key.
+_pipeline_drift_excludes() {
+  _pipeline_require_json || return 1
+  jq -r '((.round_drift.exclude_paths) // ["docs/**", "TODOS.md", "tasks/todo.md", "CHANGELOG.md"])[]
+         | ":(exclude)" + .' "$PIPELINE_STEPS_JSON"
+}
+
+# Sum of numstat columns over the staged diff, excluding the paths above.
+#   <repo> <cols: "1" for added only, "1 2" for added+removed> [base tree]
+# With a base tree it answers "how much content appeared since that tree";
+# without one, "how big is the staged diff". Echoes "" when git fails (a base
+# tree that no longer exists), which the caller reads as "cannot vouch".
+_pipeline_numstat_sum() {
+  local repo="$1" cols="$2" base="${3:-}" out
+  local -a excludes=()
+  while IFS= read -r p; do [ -n "$p" ] && excludes+=("$p"); done < <(_pipeline_drift_excludes)
+  # ${arr[@]+"${arr[@]}"} — /bin/bash here is 3.2, where expanding an EMPTY
+  # array under `set -u` is an unbound-variable error, and every guard runs with
+  # `set -euo pipefail`. An empty exclude_paths (the most natural way to say
+  # "count everything") would otherwise crash the gate mid-evaluation.
+  if [ -n "$base" ]; then
+    out=$(cd "$repo" && git diff --cached --numstat "$base" -- . ${excludes[@]+"${excludes[@]}"} 2>/dev/null) || return 0
+  else
+    out=$(cd "$repo" && git diff --cached --numstat -- . ${excludes[@]+"${excludes[@]}"} 2>/dev/null) || return 0
+  fi
+  printf '%s\n' "$out" | awk -v cols="$cols" '
+    { n = split(cols, c, " "); for (i = 1; i <= n; i++) if ($c[i] ~ /^[0-9]+$/) s += $c[i] }
+    END { print s + 0 }'
+}
+
 # pipeline_eval_gate <gate> <label>
 #   Evaluates the required steps for <gate> against the current staged diff and
 #   .claude/pipeline-state.json in the current repo. Prints a BLOCKED report to
-#   stderr and returns 1 when a marker is missing or its staged hash no longer
-#   matches. A marker older than 24h is only a soft WARN, not a block.
+#   stderr and returns 1 when a marker is missing or no longer matches the
+#   staged content. A marker older than 24h is only a soft WARN, not a block.
+#
+#   Two ways a marker satisfies the gate, chosen per step by `binding` in
+#   pipeline-steps.json (content unless listed otherwise):
+#
+#   content — its staged_hash equals the current staged hash. This was the only
+#     rule the gate had, and it deadlocked: the steps run in order, so acting on
+#     a review finding changes the content AFTER simplify was ticked, expiring
+#     it; re-running simplify can change it again and expire review. Whatever
+#     runs last and touches anything wins, forever.
+#
+#   round — the same content match, OR: written in this round (first_marked_head
+#     is the current HEAD, marker under 24h), with a LATER content-bound step in
+#     the same gate matching the current hash, and with the content that step
+#     never saw under the round_drift limit. The later step is what makes this
+#     safe: review sits after simplify and did look at the final diff, so the
+#     only thing unvouched-for is "was the post-review fix itself simplified",
+#     and the drift cap bounds how much that can be.
 #
 #   <label> is the prefix shown in messages, e.g. "pre-commit-pipeline".
 pipeline_eval_gate() {
@@ -59,49 +132,125 @@ pipeline_eval_gate() {
   repo_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
   [ -z "$repo_root" ] && return 0  # not a git repo: let git itself decide
 
-  local staged_hash now_epoch state_file mark_cmd
+  local staged_hash now_epoch state_file mark_cmd cur_head
   staged_hash=$(cd "$repo_root" && bash "$_PIPELINE_LIB_DIR/compute-staged-hash.sh")
   now_epoch=$(date +%s)
+  # --verify matters on an unborn branch: plain `git rev-parse HEAD` prints
+  # "HEAD" to stdout AND exits 128, so both sides of the || run and the value
+  # becomes the two-line string "HEAD\nno-head". Harmless while nothing read
+  # this field; it is load-bearing now that round condition 1 compares it.
+  cur_head=$(cd "$repo_root" && git rev-parse --verify --quiet HEAD 2>/dev/null || echo "no-head")
   state_file="$repo_root/.claude/pipeline-state.json"
   mark_cmd="bash ~/peter-claude-plugins/plugins/pre-commit-pipeline/scripts/pipeline-mark-done.sh"
 
-  local -a required missing stale_hash stale_time
+  local -a required missing stale_hash stale_time drift_over round_expired
   required=()
   while IFS= read -r s; do [ -n "$s" ] && required+=("$s"); done < <(pipeline_gate_steps "$gate")
 
   local state="{}"
   [ -f "$state_file" ] && state=$(cat "$state_file")
 
-  local step entry mhash mtime mepoch
+  # Pass 1 — read every step's marker. Kept in index-aligned arrays because the
+  # round rule asks about steps positioned AFTER the one being judged.
+  local -a k_name k_state k_hash k_head k_tree k_bind k_epoch
+  local step entry
   for step in "${required[@]}"; do
+    local mhash="" mtime="" mfhead="" mtree="" mstate="ok" mepoch=0
     entry=$(echo "$state" | jq -c --arg s "$step" '.[$s] // null')
     if [ "$entry" = "null" ]; then
-      missing+=("$step"); continue
+      mstate="missing"
+    else
+      mhash=$(echo "$entry" | jq -r '.staged_hash // ""')
+      mtime=$(echo "$entry" | jq -r '.done_at // .verified_at // ""')
+      mfhead=$(echo "$entry" | jq -r '.first_marked_head // ""')
+      mtree=$(echo "$entry" | jq -r '.staged_tree // ""')
+      # An entry carrying only a matching staged_hash — no done_at, no
+      # verified_at — used to satisfy the gate: not missing and not stale. That
+      # made a hand-written state file enough to clear the whole pipeline.
+      # Treat a timestampless entry as absent.
+      if [ -z "$mtime" ]; then
+        mstate="missing"
+      else
+        mepoch=$(_pipeline_iso_to_epoch "$mtime")
+      fi
     fi
-    mhash=$(echo "$entry" | jq -r '.staged_hash // ""')
-    mtime=$(echo "$entry" | jq -r '.done_at // .verified_at // ""')
-    if [ "$mhash" != "$staged_hash" ]; then
-      stale_hash+=("$step"); continue
+    k_name+=("$step"); k_state+=("$mstate"); k_hash+=("$mhash")
+    k_head+=("$mfhead"); k_tree+=("$mtree"); k_epoch+=("$mepoch")
+    k_bind+=("$(pipeline_step_binding "$step")")
+  done
+
+  # Pass 2 — judge each step.
+  local n=${#k_name[@]} i j age added total="" limit floor ratio cap later_ok
+  for ((i = 0; i < n; i++)); do
+    if [ "${k_state[$i]}" = "missing" ]; then missing+=("${k_name[$i]}"); continue; fi
+    age=$((now_epoch - ${k_epoch[$i]}))
+    if [ "${k_hash[$i]}" = "$staged_hash" ]; then
+      # epoch 0 = the timestamp did not parse. It still only warns (blocking
+      # here would make the gate stricter than before), but it is reported as
+      # what it is instead of being folded into the ">24h" message.
+      if [ "${k_epoch[$i]}" -eq 0 ]; then
+        stale_time+=("${k_name[$i]}(時間戳解析失敗)")
+      elif [ "$age" -gt 86400 ]; then
+        stale_time+=("${k_name[$i]}")
+      fi
+      continue
     fi
-    # An entry carrying only a matching staged_hash — no done_at, no verified_at
-    # — used to satisfy the gate: not missing and not stale. That made a
-    # hand-written state file enough to clear the whole pipeline. Treat a
-    # timestampless entry as absent.
-    if [ -z "$mtime" ]; then
-      missing+=("$step"); continue
+    if [ "${k_bind[$i]}" != "round" ]; then stale_hash+=("${k_name[$i]}"); continue; fi
+
+    # Round-bound and the content moved on. Every condition below must hold, and
+    # each failure falls back to the strict hash rule (never looser than before).
+    # The reason is carried into its own bucket: the "stale hash" advice (re-run
+    # it, the formatter probably rewrote your files) is wrong for all of these.
+    # An unparseable timestamp lands in the >24h branch on its own — epoch 0
+    # makes age ~1.7e9 — so it needs no separate test here.
+    if [ "${k_head[$i]}" != "$cur_head" ]; then
+      round_expired+=("${k_name[$i]}|這個章屬於上一輪（蓋章時的 HEAD 已經不是現在的 HEAD）")
+      continue
     fi
-    # epoch 0 = the timestamp did not parse. It still only warns (blocking here
-    # would make the gate stricter than before), but it is reported as what it
-    # is instead of being folded into the ">24h" message.
-    mepoch=$(_pipeline_iso_to_epoch "$mtime")
-    if [ "$mepoch" -eq 0 ]; then
-      stale_time+=("$step(時間戳解析失敗)")
-    elif [ $((now_epoch - mepoch)) -gt 86400 ]; then
-      stale_time+=("$step")
+    if [ "$age" -gt 86400 ]; then
+      round_expired+=("${k_name[$i]}|這個章超過 24 小時（或時間戳壞掉）")
+      continue
+    fi
+    if [ -z "${k_tree[$i]}" ]; then
+      round_expired+=("${k_name[$i]}|這個章沒有 staged_tree，算不出它之後改了多少（舊版 marker）")
+      continue
+    fi
+    later_ok=0
+    for ((j = i + 1; j < n; j++)); do
+      if [ "${k_bind[$j]}" != "round" ] && [ "${k_hash[$j]}" = "$staged_hash" ]; then later_ok=1; break; fi
+    done
+    if [ "$later_ok" -eq 0 ]; then
+      round_expired+=("${k_name[$i]}|它後面沒有對得上最終內容的步驟可以背書")
+      continue
+    fi
+    added=$(_pipeline_numstat_sum "$repo_root" "1" "${k_tree[$i]}")
+    if [ -z "$added" ]; then
+      # Distinguish the two ways this fails. "gc'd" was the message for both,
+      # which sent people off to re-run /simplify when the real problem was a
+      # broken exclude_paths or a git too old for :(exclude).
+      if (cd "$repo_root" && git rev-parse --verify --quiet "${k_tree[$i]}^{tree}" >/dev/null 2>&1); then
+        round_expired+=("${k_name[$i]}|算不出變動量（tree 還在，但 git diff 失敗——檢查 round_drift.exclude_paths 與 git 版本）")
+      else
+        round_expired+=("${k_name[$i]}|staged_tree 已經不存在（被 git gc 清掉或值壞掉），算不出變動量")
+      fi
+      continue
+    fi
+    # Loop-invariant: the staged diff's size and the limit do not depend on the
+    # step. Computed on the first round step that gets this far, then reused.
+    if [ -z "$total" ]; then
+      read -r floor ratio cap <<< "$(pipeline_round_drift)"
+      total=$(_pipeline_numstat_sum "$repo_root" "1 2")
+      limit=$((total * ratio / 100))
+      [ "$limit" -lt "$floor" ] && limit=$floor
+      [ "$limit" -gt "$cap" ] && limit=$cap
+    fi
+    if [ "$added" -gt "$limit" ]; then
+      drift_over+=("${k_name[$i]}|$added|$limit")
     fi
   done
 
-  if [ "${#missing[@]}" -eq 0 ] && [ "${#stale_hash[@]}" -eq 0 ]; then
+  if [ "${#missing[@]}" -eq 0 ] && [ "${#stale_hash[@]}" -eq 0 ] \
+    && [ "${#drift_over[@]}" -eq 0 ] && [ "${#round_expired[@]}" -eq 0 ]; then
     [ "${#stale_time[@]}" -gt 0 ] && echo "[$label] WARN: markers older than 24h or with a bad timestamp: ${stale_time[*]}" >&2
     return 0
   fi
@@ -128,6 +277,25 @@ pipeline_eval_gate() {
       echo "(A stale hash DURING a commit usually means the pre-commit formatter rewrote"
       echo "staged files. pipeline-mark-done.sh now runs the formatter before hashing, so"
       echo "re-running the mark commands above stabilizes the hash — then commit again.)"
+      echo ""
+    fi
+    local dname dreason dadded dlimit
+    if [ "${#round_expired[@]}" -gt 0 ]; then
+      echo "這些步驟的章無法對應到這一輪的最終內容，必須重跑："
+      for step in "${round_expired[@]}"; do
+        IFS='|' read -r dname dreason <<< "$step"
+        echo "  - $dname: $dreason"
+        echo "    → re-run $(pipeline_step_help "$dname" "$mark_cmd")"
+      done
+      echo ""
+    fi
+    if [ "${#drift_over[@]}" -gt 0 ]; then
+      echo "這些步驟跑完後又改了太多，必須重跑："
+      for step in "${drift_over[@]}"; do
+        IFS='|' read -r dname dadded dlimit <<< "$step"
+        echo "  - $dname: 之後新增 $dadded 行，上限 $dlimit 行（round_drift 的排除路徑不計）"
+        echo "    → re-run $(pipeline_step_help "$dname" "$mark_cmd")"
+      done
       echo ""
     fi
   } >&2
