@@ -20,6 +20,5 @@
     "tests": "/verify-tests (writes its own marker)",
     "document_release": "/document-release, then: {MARK} document-release",
     "tidy_docs": "/tidy-docs, then: {MARK} tidy-docs"
-  },
-  "batch_window_seconds": 5
+  }
 }

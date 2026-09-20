@@ -6,7 +6,6 @@
 #   pipeline_gate_steps <gate>        → space-separated canonical step keys for a gate (commit|ship)
 #   pipeline_resolve_alias <input>    → canonical step key for an alias, or "" if unknown
 #   pipeline_step_help <step> <mark>  → human help line ({MARK} replaced by <mark>), or "" if none
-#   pipeline_batch_window             → batch-tick window in seconds (C / anti-gaming)
 #
 # Resolution of the JSON path: <plugin_root>/pipeline-steps.json, where plugin_root
 # is two levels up from this script (scripts/ -> plugin root).
@@ -40,11 +39,6 @@ pipeline_step_help() {
   jq -r --arg s "$step" --arg m "$mark" '(.help[$s] // "") | gsub("\\{MARK\\}"; $m)' "$PIPELINE_STEPS_JSON"
 }
 
-pipeline_batch_window() {
-  _pipeline_require_json || return 1
-  jq -r '.batch_window_seconds // 5' "$PIPELINE_STEPS_JSON"
-}
-
 # ISO-8601 (UTC, "...Z") → epoch seconds; echoes 0 on parse failure.
 _pipeline_iso_to_epoch() {
   date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$1" +%s 2>/dev/null || echo 0
@@ -53,8 +47,8 @@ _pipeline_iso_to_epoch() {
 # pipeline_eval_gate <gate> <label>
 #   Evaluates the required steps for <gate> against the current staged diff and
 #   .claude/pipeline-state.json in the current repo. Prints a BLOCKED report to
-#   stderr and returns 1 if the pipeline is incomplete, stale, or gamed
-#   (batch-ticked). Returns 0 (and only a soft WARN for >24h markers) if clean.
+#   stderr and returns 1 when a marker is missing or its staged hash no longer
+#   matches. A marker older than 24h is only a soft WARN, not a block.
 #
 #   <label> is the prefix shown in messages, e.g. "pre-commit-pipeline".
 pipeline_eval_gate() {
@@ -65,23 +59,20 @@ pipeline_eval_gate() {
   repo_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
   [ -z "$repo_root" ] && return 0  # not a git repo: let git itself decide
 
-  local staged_hash now_epoch state_file mark_cmd window cur_head
+  local staged_hash now_epoch state_file mark_cmd
   staged_hash=$(cd "$repo_root" && bash "$_PIPELINE_LIB_DIR/compute-staged-hash.sh")
   now_epoch=$(date +%s)
-  cur_head=$(cd "$repo_root" && git rev-parse HEAD 2>/dev/null || echo "no-head")
   state_file="$repo_root/.claude/pipeline-state.json"
   mark_cmd="bash ~/peter-claude-plugins/plugins/pre-commit-pipeline/scripts/pipeline-mark-done.sh"
-  window=$(pipeline_batch_window)
 
   local -a required missing stale_hash stale_time
-  local -a fresh_epochs
   required=()
   while IFS= read -r s; do [ -n "$s" ] && required+=("$s"); done < <(pipeline_gate_steps "$gate")
 
   local state="{}"
   [ -f "$state_file" ] && state=$(cat "$state_file")
 
-  local step entry mhash mtime mfirst mfhead mepoch mfepoch tick_epoch age
+  local step entry mhash mtime mepoch
   for step in "${required[@]}"; do
     entry=$(echo "$state" | jq -c --arg s "$step" '.[$s] // null')
     if [ "$entry" = "null" ]; then
@@ -89,70 +80,29 @@ pipeline_eval_gate() {
     fi
     mhash=$(echo "$entry" | jq -r '.staged_hash // ""')
     mtime=$(echo "$entry" | jq -r '.done_at // .verified_at // ""')
-    mfirst=$(echo "$entry" | jq -r '.first_marked_at // ""')
-    mfhead=$(echo "$entry" | jq -r '.first_marked_head // ""')
     if [ "$mhash" != "$staged_hash" ]; then
       stale_hash+=("$step"); continue
     fi
     # An entry carrying only a matching staged_hash — no done_at, no verified_at
-    # — used to satisfy the gate: not missing, not stale, and contributing no
-    # timestamp to the batch check. That made a hand-written state file enough
-    # to clear the whole pipeline. Treat a timestampless entry as absent.
+    # — used to satisfy the gate: not missing and not stale. That made a
+    # hand-written state file enough to clear the whole pipeline. Treat a
+    # timestampless entry as absent.
     if [ -z "$mtime" ]; then
       missing+=("$step"); continue
     fi
+    # epoch 0 = the timestamp did not parse. It still only warns (blocking here
+    # would make the gate stricter than before), but it is reported as what it
+    # is instead of being folded into the ">24h" message.
     mepoch=$(_pipeline_iso_to_epoch "$mtime")
-    age=$((now_epoch - mepoch))
-    [ "$age" -gt 86400 ] && stale_time+=("$step")
-    # Batch-tick reads the FIRST tick, not the latest one. Re-marking (which a
-    # staged-diff change after the pipeline forces — review fixes something, a
-    # TODO gets logged) necessarily lands every done_at in the same second, so
-    # judging on done_at flags the most thorough runs. first_marked_at still
-    # holds when each step genuinely finished. Markers predating this field fall
-    # back to done_at, keeping the old behaviour.
-    #
-    # Three ways a first_marked_at is refused and done_at read instead, all of
-    # them cases where trusting it would widen the spread and wave a batch
-    # through: its recorded HEAD is not the current one (the timestamp belongs
-    # to a round that already ended in a commit — checked here as well as in
-    # pipeline-mark-done.sh, so a hand-written state file cannot claim an old
-    # round either); it does not parse (epoch 0); or it sits in the future,
-    # which would otherwise never age out.
-    tick_epoch=$mepoch
-    if [ -n "$mfirst" ] && [ "$mfhead" = "$cur_head" ]; then
-      mfepoch=$(_pipeline_iso_to_epoch "$mfirst")
-      if [ "$mfepoch" -gt 0 ] && [ "$mfepoch" -le "$now_epoch" ]; then
-        tick_epoch=$mfepoch
-      fi
+    if [ "$mepoch" -eq 0 ]; then
+      stale_time+=("$step(時間戳解析失敗)")
+    elif [ $((now_epoch - mepoch)) -gt 86400 ]; then
+      stale_time+=("$step")
     fi
-    fresh_epochs+=("$tick_epoch")
   done
 
-  # C — batch-tick detection: 2+ fresh markers first ticked within <= window
-  # cannot reflect a real run (a genuine /review alone takes minutes).
-  #
-  # Exempt: docs-only staged diffs. The 2026-08 week audit found 6/6 batch-tick
-  # blocks were false positives, clustered on INDEX.md / ADR / TODO amends where
-  # re-ticking all markers back-to-back is the legitimate flow — a docs line
-  # needs no multi-minute review, and the real anti-gaming value lies on code.
-  local docs_only=0
-  if ! (cd "$repo_root" && git diff --cached --name-only 2>/dev/null) | grep -qvE '^docs/|\.md$'; then
-    docs_only=1
-  fi
-  local batch_gamed=0 min_e max_e e
-  if [ "${#fresh_epochs[@]}" -ge 2 ] && [ "$docs_only" -eq 0 ]; then
-    min_e=${fresh_epochs[0]}; max_e=${fresh_epochs[0]}
-    for e in "${fresh_epochs[@]}"; do
-      [ "$e" -lt "$min_e" ] && min_e=$e
-      [ "$e" -gt "$max_e" ] && max_e=$e
-    done
-    if [ $((max_e - min_e)) -le "$window" ]; then
-      batch_gamed=1
-    fi
-  fi
-
-  if [ "${#missing[@]}" -eq 0 ] && [ "${#stale_hash[@]}" -eq 0 ] && [ "$batch_gamed" -eq 0 ]; then
-    [ "${#stale_time[@]}" -gt 0 ] && echo "[$label] WARN: markers older than 24h: ${stale_time[*]}" >&2
+  if [ "${#missing[@]}" -eq 0 ] && [ "${#stale_hash[@]}" -eq 0 ]; then
+    [ "${#stale_time[@]}" -gt 0 ] && echo "[$label] WARN: markers older than 24h or with a bad timestamp: ${stale_time[*]}" >&2
     return 0
   fi
 
@@ -161,18 +111,15 @@ pipeline_eval_gate() {
     echo "[$label] BLOCKED — pipeline incomplete for staged diff:"
     echo "  staged_hash: ${staged_hash:0:12}..."
     echo ""
-    if [ "$batch_gamed" -eq 1 ]; then
-      echo "Suspected batch-tick (steps FIRST marked within ${window}s of each other — a real"
-      echo "review/simplify cannot complete that fast). Run the steps for real, then mark."
-      echo "(Re-marking after the staged diff changed is fine — that keeps each step's"
-      echo "original first_marked_at, so it does not trip this check. To avoid it entirely,"
-      echo "mark each step RIGHT AFTER it completes instead of batching the ticks at commit"
-      echo "time. Docs-only staged diffs are exempt from this check.)"
-      echo ""
-    fi
     if [ "${#missing[@]}" -gt 0 ]; then
       echo "Missing markers:"
       for step in "${missing[@]}"; do echo "  - run $(pipeline_step_help "$step" "$mark_cmd")"; done
+      echo ""
+    fi
+    # The >24h warning is printed on the clean path too; repeating it here keeps
+    # it from being swallowed whenever the gate blocks for another reason.
+    if [ "${#stale_time[@]}" -gt 0 ]; then
+      echo "Also: markers older than 24h or with a bad timestamp: ${stale_time[*]}"
       echo ""
     fi
     if [ "${#stale_hash[@]}" -gt 0 ]; then

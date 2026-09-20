@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # pre-ship-guard.sh — PreToolUse (SlashCommand) hook for Claude Code.
 # Blocks /ship until the full ship-gate markers (see pipeline-steps.json) are
-# present, fresh, and not batch-ticked. No WIP escape hatch — /ship is a formal
+# present and bound to the current staged diff. No WIP escape hatch — /ship is a formal
 # release and must clear the whole pipeline.
 #
 # Exit codes:

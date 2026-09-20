@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # pre-commit-guard.sh — PreToolUse (Bash) hook for Claude Code.
 # Blocks `git commit` until the commit-gate markers (see pipeline-steps.json)
-# are present, fresh, and not batch-ticked. The git-native commit-msg guard
+# are present and bound to the current staged diff. The git-native commit-msg guard
 # (hooks/git-commit-msg-guard.sh, wired via ~/.config/husky/init.sh) is the
 # cross-agent backstop; this hook adds earlier/inline blocking inside Claude.
 #
