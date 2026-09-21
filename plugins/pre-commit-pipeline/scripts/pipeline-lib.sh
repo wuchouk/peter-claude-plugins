@@ -61,6 +61,141 @@ pipeline_round_drift() {
     "$PIPELINE_STEPS_JSON"
 }
 
+# Sets _PIPELINE_REPO_ROOT, computed once per process. Callers read the variable
+# rather than `$(_pipeline_repo_root)` — a command substitution runs in a
+# subshell, so the memo would never survive and every call would pay for git
+# again (the first version of this did exactly that).
+_pipeline_repo_root() {
+  if [ -z "${_PIPELINE_REPO_ROOT+set}" ]; then
+    _PIPELINE_REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || true)
+  fi
+}
+
+# Does this git understand the pathspec magic the docs-only rule is written in?
+# `:(exclude)` and `:(glob)` need git >= 1.9. On an older git every pathspec
+# below errors out, and code that reads "no output" as "no non-docs files" would
+# hand out the exemption to a pure-code commit. Checked once per process.
+_pipeline_pathspec_magic_ok() {
+  if [ -z "${_PIPELINE_MAGIC_OK+set}" ]; then
+    if git diff --cached --name-only -- ':(glob)**/*' ':(exclude)nothing' >/dev/null 2>&1; then
+      _PIPELINE_MAGIC_OK=1
+    else
+      _PIPELINE_MAGIC_OK=0
+    fi
+  fi
+  [ "$_PIPELINE_MAGIC_OK" = "1" ]
+}
+
+# pipeline_docs_only_exempt <gate> <label>
+#   Returns 0 when this staged diff needs no markers at all: every path matches
+#   docs_only.paths and none matches docs_only.instruction_paths, for a gate
+#   listed in docs_only.gates. Prints the reason to stderr either way — a silent
+#   skip is indistinguishable from a broken gate.
+#
+#   The exemption must also skip the evidence check, or it does not hold: a
+#   `fix(docs): typo` message still demands a regression test and a stale .tests
+#   marker still demands its evidence files. pipeline_enforce() owns that order
+#   so no caller has to remember it.
+#
+#   No docs_only key (an older pipeline-steps.json) → never exempt.
+pipeline_docs_only_exempt() {
+  local gate="$1" label="${2:-pre-commit-pipeline}"
+  _pipeline_require_json || return 1
+  # The caller can say "this command reaches beyond the index, do not exempt"
+  # (git commit -a / --amend / pathspec — see pre-commit-guard.sh).
+  [ "${PIPELINE_NO_DOCS_EXEMPT:-}" = "1" ] && return 1
+
+  # EVERY failure below returns 1 (no exemption). This function decides whether
+  # to switch the gate OFF, so "the command errored" must never read as "found
+  # nothing objectionable" — that is how a pure-code commit gets waved through.
+  local jq_out jq_rc=0
+  jq_out=$(jq -r '(.docs_only // {}) as $d
+                  | ((($d.gates? // [])[] | ["gate", .]),
+                     (($d.paths? // [])[] | ["doc", .]),
+                     (($d.instruction_paths? // [])[] | ["instr", .]))
+                  | map(if type == "string" then . else error("non-string pattern") end)
+                  | @tsv' "$PIPELINE_STEPS_JSON" 2>/dev/null) || jq_rc=$?
+  # A partial read is the dangerous one: @tsv aborts mid-stream on a bad element,
+  # and if it died before the instruction patterns, the list looks empty.
+  [ "$jq_rc" -eq 0 ] || return 1
+
+  local -a docs_ps instr_ps
+  local kind value gate_ok=0
+  docs_ps=(); instr_ps=()
+  while IFS=$'\t' read -r kind value; do
+    case "$kind" in
+      gate)  [ "$value" = "$gate" ] && gate_ok=1 ;;
+      doc)   [ -n "$value" ] && docs_ps+=("$value") ;;
+      instr) [ -n "$value" ] && instr_ps+=("$value") ;;
+    esac
+  done <<< "$jq_out"
+  [ "$gate_ok" -eq 1 ] || return 1
+  [ "${#docs_ps[@]}" -gt 0 ] || return 1
+
+  _pipeline_repo_root
+  local repo_root="$_PIPELINE_REPO_ROOT"
+  [ -n "$repo_root" ] || return 1
+  # An old git rejects every :(exclude)/:(glob) pathspec below; without this the
+  # rejections all look like "nothing matched" and the gate turns itself off.
+  _pipeline_pathspec_magic_ok || return 1
+
+  # Ask the cheap question first: is there ANY staged path that is not docs?
+  # One git call, and it answers the common case (a normal code commit) without
+  # counting anything. `:(exclude)` is the same idiom the drift excludes use.
+  local -a probe=(); local p
+  for p in "${docs_ps[@]}"; do probe+=(":(exclude)$p"); done
+  local non_docs git_rc=0
+  non_docs=$(cd "$repo_root" && git -c core.quotePath=false diff --cached --name-only -- . "${probe[@]}" 2>/dev/null) || git_rc=$?
+  [ "$git_rc" -eq 0 ] || return 1
+  [ -z "$non_docs" ] || return 1
+  # An empty staged diff is not a docs-only change; let the normal path handle it.
+  local staged_any
+  staged_any=$(cd "$repo_root" && git diff --cached --name-only 2>/dev/null) || return 1
+  [ -n "$staged_any" ] || return 1
+
+  local instr_files=""
+  if [ "${#instr_ps[@]}" -gt 0 ]; then
+    git_rc=0
+    instr_files=$(cd "$repo_root" && git -c core.quotePath=false diff --cached --name-only -- "${instr_ps[@]}" 2>/dev/null) || git_rc=$?
+    [ "$git_rc" -eq 0 ] || return 1
+  fi
+  if [ -z "$instr_files" ]; then
+    echo "[$label] docs-only staged diff — gate skipped（沒有任何檔案落在 docs_only.paths 之外）" >&2
+    return 0
+  fi
+  # Every path is docs-shaped, but some of it is the agent's own instructions,
+  # which are code as far as this gate is concerned. Say which.
+  {
+    echo "[$label] 注意：這次不算純文件（所以不免審），因為這些檔屬於指令類"
+    echo "（docs_only.instruction_paths）："
+    printf '%s\n' "$instr_files" | head -5 | sed 's/^/  - /'
+  } >&2
+  return 1
+}
+
+# pipeline_enforce <gate> <label> [commit_msg]
+#   The one entry point the guards call. Owns the ORDER — docs-only exemption,
+#   then the marker gate, then the evidence check — so that "the exemption must
+#   skip evidence too" is a property of this function instead of something three
+#   separate guards have to remember. Returns 0 to allow, 1 to block; each guard
+#   keeps its own exit code and its own follow-up advice.
+#
+#   evidence_gates (pipeline-steps.json) says where the evidence hard-check
+#   applies — commit only, matching what the guards did before they shared an
+#   entry point. Anything unreadable or not an array RUNS the check: the failure
+#   direction has to be "check too much", or a typo in the config silently turns
+#   the evidence rules off everywhere.
+pipeline_enforce() {
+  local gate="$1" label="${2:-pre-commit-pipeline}" msg="${3:-}" want=""
+  pipeline_docs_only_exempt "$gate" "$label" && return 0
+  pipeline_eval_gate "$gate" "$label" || return 1
+  want=$(jq -r --arg g "$gate" \
+    'if (.evidence_gates | type) == "array" then (if (.evidence_gates | index($g)) then "yes" else "no" end) else "yes" end' \
+    "$PIPELINE_STEPS_JSON" 2>/dev/null || echo yes)
+  [ "$want" = "no" ] || pipeline_check_evidence "$label" "$msg" || return 1
+  return 0
+}
+
 # ISO-8601 (UTC, "...Z") → epoch seconds; echoes 0 on parse failure.
 _pipeline_iso_to_epoch() {
   date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$1" +%s 2>/dev/null || echo 0
@@ -69,12 +204,15 @@ _pipeline_iso_to_epoch() {
 # Paths left out of both drift numbers, as git pathspecs. Defined in
 # pipeline-steps.json so the knob lives with every other gate knob — the first
 # version hardcoded `*.md` here, which blinded the gate to any repo whose
-# product IS markdown (this one: SKILL.md, the plugin READMEs). The defaults
-# below only apply when the JSON omits the key.
+# product IS markdown (this one: SKILL.md, the plugin READMEs).
+#
+# No key → exclude nothing. A hardcoded fallback list was the second version and
+# it immediately drifted: the JSON list was narrowed and this copy was not, so a
+# steps.json without the key silently restored the hole the narrowing closed.
+# One list, in the JSON; missing config is strict, like everything else here.
 _pipeline_drift_excludes() {
   _pipeline_require_json || return 1
-  jq -r '((.round_drift.exclude_paths) // ["docs/**", "TODOS.md", "tasks/todo.md", "CHANGELOG.md"])[]
-         | ":(exclude)" + .' "$PIPELINE_STEPS_JSON"
+  jq -r '(.round_drift.exclude_paths? // [])[] | ":(exclude)" + .' "$PIPELINE_STEPS_JSON"
 }
 
 # Sum of numstat columns over the staged diff, excluding the paths above.
@@ -129,7 +267,7 @@ pipeline_eval_gate() {
   _pipeline_require_json || return 1
 
   local repo_root
-  repo_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+  _pipeline_repo_root; repo_root="$_PIPELINE_REPO_ROOT"
   [ -z "$repo_root" ] && return 0  # not a git repo: let git itself decide
 
   local staged_hash now_epoch state_file mark_cmd cur_head
@@ -311,7 +449,7 @@ pipeline_eval_gate() {
 pipeline_check_evidence() {
   local label="${1:-pre-commit-pipeline}" msg="${2:-}"
   local repo_root state_file entry
-  repo_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+  _pipeline_repo_root; repo_root="$_PIPELINE_REPO_ROOT"
   [ -z "$repo_root" ] && return 0
   state_file="$repo_root/.claude/pipeline-state.json"
   [ -f "$state_file" ] || return 0

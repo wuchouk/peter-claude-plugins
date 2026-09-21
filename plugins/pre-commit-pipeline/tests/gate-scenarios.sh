@@ -45,6 +45,28 @@ gate_run() {
     && GATE_RC=0 || GATE_RC=$?
 }
 
+# 三條執法路徑各自的結果。純文件豁免住在 guard 裡（在 pipeline_eval_gate 之前），
+# 所以只用 gate_run 測不到它——三條都要各自驗，否則會出現「lib 對了但某條路徑沒接上」。
+guard_run() {   # $1 = pretooluse|gitnative|ship
+  local layer="$1"
+  case "$layer" in
+    pretooluse)
+      G_OUT=$(echo '{"tool_input":{"command":"git commit -m \"docs: x\""}}' \
+        | bash "$PLUGIN/hooks/pre-commit-guard.sh" 2>&1) && G_RC=0 || G_RC=$? ;;
+    gitnative)
+      G_OUT=$(bash "$PLUGIN/hooks/git-commit-msg-guard.sh" 2>&1) && G_RC=0 || G_RC=$? ;;
+    ship)
+      G_OUT=$(echo '{"tool_input":{"command":"/ship"}}' \
+        | bash "$PLUGIN/hooks/pre-ship-guard.sh" 2>&1) && G_RC=0 || G_RC=$? ;;
+  esac
+}
+
+# 建一份純文件的 staged diff（不蓋任何章）
+stage_files() {
+  local f
+  for f in "$@"; do mkdir -p "$(dirname "$f")"; echo "內容 $f" >> "$f"; git add "$f"; done
+}
+
 # 產生 n 行內容附加到檔案並 stage
 add_lines() {
   local file="$1" n="$2" tag="$3" i
@@ -297,6 +319,261 @@ NEW_TREE=$(jq -r '.simplify.staged_tree // ""' .claude/pipeline-state.json)
 { [ "$HAS_TREE" = "no" ] || [ "$NEW_TREE" != "$OLD_TREE" ]; } \
   && pass "write-tree 失敗時不會留下上一輪的 staged_tree" \
   || fail "staged_tree 還停在舊值 $OLD_TREE，但 staged_hash 已經換了"
+
+echo ""
+echo "=== Q) 純文件的 commit 免三個章 ==="
+
+# Q1 — 全是 docs/*.md、零個章 → 放行並印說明
+new_repo docsonly-pass
+stage_files docs/guide.md docs/adr/0001-x.md
+guard_run pretooluse
+{ [ "$G_RC" = "0" ] && printf '%s' "$G_OUT" | grep -q "docs-only"; } \
+  && pass "Q1 全 docs/*.md 無章 → 放行並印說明" || fail "Q1 被擋或沒印說明（rc=$G_RC）：$G_OUT"
+
+# Q2 — 純文件混一個 .ts → 照常擋
+new_repo docsonly-mixed
+stage_files docs/guide.md src/app.ts
+guard_run pretooluse
+[ "$G_RC" != "0" ] && pass "Q2 混一個 .ts → 照常擋" || fail "Q2 有程式碼卻豁免了"
+
+# Q3/Q4/Q9 — 文件形狀、但內容就是 agent 指令 → 擋，而且訊息要指名是哪個檔。
+# 巢狀 .claude/ 那筆是 :(glob) 換掉雙寫樣式後才涵蓋到的：舊的 '.claude/**' 只命中
+# 頂層，apps/x/.claude/skills/** 會整個漏掉。
+for f in CLAUDE.md plugins/p/skills/x/SKILL.md skills/verify-feature/reference.md \
+         apps/x/.claude/skills/d/SKILL.md docs/AGENTS.md; do
+  new_repo "docsonly-instr-$(echo "$f" | tr '/.' '--')"
+  stage_files "$f"
+  guard_run pretooluse
+  { [ "$G_RC" != "0" ] && printf '%s' "$G_OUT" | grep -qF "$f"; } \
+    && pass "Q3/4/9 指令類 $f → 擋且訊息指名" || fail "Q3/4/9 $f 沒擋或沒指名（rc=$G_RC）：$G_OUT"
+done
+
+# Q5 — 舊 JSON 沒有 docs_only 鍵 → 不豁免、不報錯
+new_repo docsonly-legacyjson
+stage_files docs/guide.md
+jq 'del(.docs_only)' "$PLUGIN/pipeline-steps.json" > steps-nodocs.json
+out=$( ( . "$PLUGIN/scripts/pipeline-lib.sh"; PIPELINE_STEPS_JSON="$PWD/steps-nodocs.json" \
+  pipeline_docs_only_exempt commit test ) 2>&1 ) && rc=0 || rc=$?
+{ [ "$rc" != "0" ] && ! printf '%s' "$out" | grep -qiE 'jq: error|unbound|syntax error'; } \
+  && pass "Q5 舊 JSON 無 docs_only → 不豁免且不報錯" || fail "Q5 rc=$rc out=$out"
+
+# Q6 — 端到端：真實 git commit 一正一反
+new_repo docsonly-e2e-pass
+bash "$PLUGIN/scripts/install-git-hook.sh" >/dev/null 2>&1
+stage_files docs/guide.md
+if git commit -qm "docs: 只改文件" 2>/dev/null; then pass "Q6a 純文件的真實 commit 通過" ; else fail "Q6a 純文件的真實 commit 被擋"; fi
+new_repo docsonly-e2e-block
+bash "$PLUGIN/scripts/install-git-hook.sh" >/dev/null 2>&1
+stage_files docs/guide.md src/app.ts
+if git commit -qm "feat: 混程式碼" 2>/dev/null; then fail "Q6b 含程式碼卻 commit 成功"; else pass "Q6b 含程式碼的真實 commit 被擋"; fi
+
+# Q7 — 三條路徑行為一致（同一份純文件 staged diff）
+new_repo docsonly-3layers
+stage_files docs/guide.md
+guard_run pretooluse; RC_PRE=$G_RC
+guard_run gitnative;  RC_GIT=$G_RC
+{ [ "$RC_PRE" = "0" ] && [ "$RC_GIT" = "0" ]; } \
+  && pass "Q7 PreToolUse 與 git-native 兩條路徑都放行" || fail "Q7 兩條路徑不一致（pretooluse=$RC_PRE gitnative=$RC_GIT）"
+
+# Q8/Q15 — 根本不是文件形狀 → 擋。舊的 ^docs/ regex 會把 docs/ 底下的所有東西當文件，
+# 而 platform 的 docs/ 底下有 16 個 .ts、59 個 json（含驅動 evidence 規則的 config.yaml）；
+# requirements.txt 則是「*.txt 進過初稿又拿掉」的理由。
+for f in docs/tools/gen.ts docs/verification/config.yaml requirements.txt; do
+  new_repo "docsonly-notdoc-$(echo "$f" | tr '/.' '--')"
+  stage_files "$f"
+  guard_run pretooluse
+  [ "$G_RC" != "0" ] && pass "Q8/15 非文件 $f → 擋" || fail "Q8/15 $f 被當成文件豁免"
+done
+
+# Q10 — .md 配一張 .png → 放行（ADR 配圖是常態）
+new_repo docsonly-asset
+stage_files docs/adr/0002-y.md docs/adr/img.png
+guard_run pretooluse
+[ "$G_RC" = "0" ] && pass "Q10 md 配惰性素材 → 放行" || fail "Q10 配圖破壞了豁免：$G_OUT"
+
+# Q11 — ship gate 不豁免（同一份 docs-only diff：commit 放行、ship 擋下）
+new_repo docsonly-ship
+stage_files docs/guide.md
+guard_run pretooluse; RC_C=$G_RC
+guard_run ship;       RC_S=$G_RC
+{ [ "$RC_C" = "0" ] && [ "$RC_S" != "0" ]; } \
+  && pass "Q11 commit 豁免、ship 不豁免" || fail "Q11 ship 也被豁免了（commit=$RC_C ship=$RC_S）"
+# 證明 ship 的接線是活的：把 ship 加進 docs_only.gates 就會豁免。沒有這一筆，
+# pre-ship-guard 裡那行呼叫刪掉測試也不會紅（「改資料就能改行為」變成空話）。
+jq '.docs_only.gates = ["commit","ship"]' "$PLUGIN/pipeline-steps.json" > steps-shipexempt.json
+rc=$( ( . "$PLUGIN/scripts/pipeline-lib.sh"; PIPELINE_STEPS_JSON="$PWD/steps-shipexempt.json" \
+  pipeline_docs_only_exempt ship test >/dev/null 2>&1 ); echo $? )
+[ "$rc" = "0" ] && pass "Q11b docs_only.gates 加入 ship → ship 也豁免（接線是活的）" \
+  || fail "Q11b 改了 gates 卻沒生效（rc=$rc）"
+
+# Q12 — 今天的真實案例 (a)：~/.agents 只改 AGENTS.md / AGENTS-reference.md / CHANGELOG.md
+#       AGENTS*.md 是 agent 規則本身，該審 → 擋
+new_repo docsonly-agentsmd
+stage_files AGENTS.md AGENTS-reference.md CHANGELOG.md
+guard_run pretooluse
+{ [ "$G_RC" != "0" ] && printf '%s' "$G_OUT" | grep -q "AGENTS"; } \
+  && pass "Q12 只改 AGENTS*.md + CHANGELOG → 擋且指名 AGENTS" || fail "Q12 改 agent 規則卻免審：$G_OUT"
+
+# Q13 — 今天的真實案例 (b)：platform 的純文件形狀 → 放行
+new_repo docsonly-platform
+stage_files TODOS.md docs/INDEX.md docs/design/plan.md \
+  docs/design-system/tokens/README.md docs/design-system/tokens/assets/logo.svg
+guard_run pretooluse
+[ "$G_RC" = "0" ] && pass "Q13 platform 的純文件形狀（含 svg）→ 放行" || fail "Q13 被擋：$G_OUT"
+
+# Q14 — 變動量的 exclude_paths 也不能把 docs/ 底下的程式碼當文件
+new_repo docsonly-driftts
+add_lines app.py 10 A
+bash "$MARK" simplify >/dev/null
+mkdir -p docs/tools
+add_lines docs/tools/gen.ts 300 D
+bash "$MARK" review >/dev/null
+bash "$MARK" verify-tests >/dev/null
+gate_run commit
+[ "$GATE_RC" != "0" ] && pass "Q14 simplify 後改 300 行 docs/*.ts → 計入變動量並擋下" \
+  || fail "Q14 docs/ 底下的程式碼沒計入變動量"
+
+echo ""
+echo "=== S) evidence 硬檢查真的有跑（之前整份測試從沒讓它做事）==="
+# 整份 gate-scenarios 以前沒有任何情境寫過 .tests 的 evidence 欄位，於是
+# pipeline_check_evidence 一律在 `[ -f state ] || return 0` 早退。結果是「豁免要短路
+# evidence」這條最要緊的性質零覆蓋：把 evidence 搬到豁免之前、或讓 ship 也跑 evidence、
+# 或把 evidence_gates 改成空陣列，三種破壞測試都照樣全綠。
+break_evidence() {   # 讓 .tests 指向一個不存在的證據檔
+  jq '.tests.evidence_required = ["render"] | .tests.evidence = {"render": "docs/nope.png"}' \
+    .claude/pipeline-state.json > .claude/s.tmp && mv .claude/s.tmp .claude/pipeline-state.json
+}
+
+# S1 — 純文件 + 壞掉的證據 + fix(docs) 訊息 → 仍然放行（豁免有短路 evidence）
+new_repo evidence-exempt
+add_lines app.py 5 A
+for s in simplify review verify-tests; do bash "$MARK" "$s" >/dev/null; done
+break_evidence
+git reset -q HEAD app.py && git checkout -q -- app.py 2>/dev/null || true
+stage_files docs/guide.md
+out=$(echo '{"tool_input":{"command":"git commit -m \"fix(docs): 錯字\""}}' \
+  | bash "$PLUGIN/hooks/pre-commit-guard.sh" 2>&1) && rc=0 || rc=$?
+[ "$rc" = "0" ] && pass "S1 純文件豁免時 evidence 不會擋（fix(docs) 也不用補 regression）" \
+  || fail "S1 豁免沒有短路 evidence（rc=$rc）：$out"
+
+# S2 — 非純文件 + 章齊全 + 壞掉的證據 → commit 擋下（evidence 確實在跑）
+new_repo evidence-commit
+add_lines app.py 5 A
+for s in simplify review verify-tests; do bash "$MARK" "$s" >/dev/null; done
+break_evidence
+guard_run pretooluse
+{ [ "$G_RC" != "0" ] && printf '%s' "$G_OUT" | grep -q "evidence"; } \
+  && pass "S2 commit gate 會跑 evidence 並擋下壞證據" || fail "S2 evidence 沒跑（rc=$G_RC）：$G_OUT"
+
+# S3 — 同樣壞證據，但走 ship → 放行。鎖住既有行為：pre-ship-guard 從來不跑 evidence，
+#      改成單一入口時不能順手把它變嚴。
+new_repo evidence-ship
+add_lines app.py 5 A
+for s in simplify review verify-tests document-release tidy-docs; do bash "$MARK" "$s" >/dev/null; done
+break_evidence
+guard_run ship
+[ "$G_RC" = "0" ] && pass "S3 ship gate 不跑 evidence（與改動前一致）" \
+  || fail "S3 ship 變嚴了（rc=$G_RC）：$G_OUT"
+
+# S4 — 刪掉 exclude_paths 這個鍵 → 不得有硬編 fallback 頂替（上一輪那份 fallback
+#      在 JSON 收窄後沒跟上，是「兩份清單各自漂移」的實例）
+new_repo exclude-nokey
+add_lines app.py 10 A
+bash "$MARK" simplify >/dev/null
+mkdir -p docs
+add_lines docs/notes.md 300 D
+bash "$MARK" review >/dev/null
+bash "$MARK" verify-tests >/dev/null
+jq 'del(.round_drift.exclude_paths)' "$PLUGIN/pipeline-steps.json" > steps-nokey.json
+rc=$( ( . "$PLUGIN/scripts/pipeline-lib.sh"; PIPELINE_STEPS_JSON="$PWD/steps-nokey.json" \
+  pipeline_eval_gate commit test >/dev/null 2>&1 ); echo $? )
+[ "$rc" != "0" ] && pass "S4 沒有 exclude_paths 鍵 → 什麼都不排除（無硬編 fallback）" \
+  || fail "S4 有東西頂替了缺少的設定"
+
+# S5 — 空的 staged diff 不豁免（README 明講、但原本零覆蓋）
+new_repo empty-staged
+guard_run pretooluse
+[ "$G_RC" != "0" ] && pass "S5 空的 staged diff 不豁免" || fail "S5 空 diff 被當成純文件放行"
+
+# S6 — evidence_gates 壞掉時要往「多檢查」倒，不能靜默關閉 evidence
+new_repo evidence-badcfg
+add_lines app.py 5 A
+for s in simplify review verify-tests; do bash "$MARK" "$s" >/dev/null; done
+break_evidence
+for bad in '{}' '"commit"' 'null'; do
+  jq --argjson v "$bad" '.evidence_gates = $v' "$PLUGIN/pipeline-steps.json" > steps-badev.json
+  rc=$( ( . "$PLUGIN/scripts/pipeline-lib.sh"; PIPELINE_STEPS_JSON="$PWD/steps-badev.json" \
+    pipeline_enforce commit test >/dev/null 2>&1 ); echo $? )
+  [ "$rc" = "0" ] && { fail "S6 evidence_gates=$bad 讓 evidence 靜默不跑"; break; }
+done
+[ "$rc" != "0" ] && pass "S6 evidence_gates 型別壞掉時仍會跑 evidence（fail-closed）"
+
+echo ""
+echo "=== T) 豁免的 fail-open 面（對抗式審查抓到的四個 P0）==="
+
+# T1 — git commit -a：PreToolUse 在 git 之前評估，只看得到 index；-a 會把 worktree
+#      的改動在 commit 當下併進去。docs-only 的 index + `git commit -am` 曾經讓帶著
+#      程式碼的 commit 整個免審（改動前是擋的，所以這是新開的洞）。
+new_repo exempt-commit-a
+stage_files docs/guide.md
+echo "function BACKDOOR() {}" >> app.py     # 改了但沒 stage
+out=$(echo '{"tool_input":{"command":"git commit -am \"docs: tweak\""}}' \
+  | bash "$PLUGIN/hooks/pre-commit-guard.sh" 2>&1) && rc=0 || rc=$?
+[ "$rc" != "0" ] && pass "T1 git commit -a 不吃豁免" || fail "T1 -a 讓未 stage 的程式碼免審"
+for form in 'git commit --amend' 'git commit -i docs/guide.md' 'git commit -- docs/guide.md'; do
+  out=$(echo "{\"tool_input\":{\"command\":\"$form\"}}" \
+    | bash "$PLUGIN/hooks/pre-commit-guard.sh" 2>&1) && rc=0 || rc=$?
+  [ "$rc" != "0" ] && pass "T1 $form 不吃豁免" || fail "T1 $form 讓 index 以外的內容免審"
+done
+
+# T2 — 舊版 git（不支援 :(exclude)/:(glob)）：所有 pathspec 都會被拒絕，而「沒有輸出」
+#      若被讀成「沒有非文件檔」，純程式碼的 commit 會被判定成純文件並整個放行。
+new_repo exempt-old-git
+stage_files src/app.ts
+mkdir -p fakebin
+cat > fakebin/git <<'SHIM'
+#!/bin/bash
+for a in "$@"; do case "$a" in ':(exclude)'*|':(glob'*) echo "fatal: unsupported magic" >&2; exit 128 ;; esac; done
+exec /usr/bin/git "$@"
+SHIM
+chmod +x fakebin/git
+rc=$( ( export PATH="$PWD/fakebin:$PATH"; . "$PLUGIN/scripts/pipeline-lib.sh"; \
+  pipeline_docs_only_exempt commit test >/dev/null 2>&1 ); echo $? )
+[ "$rc" != "0" ] && pass "T2 git 不支援 pathspec magic → 不豁免（fail-closed）" \
+  || fail "T2 舊版 git 讓純程式碼的 commit 被當成純文件"
+
+# T3 — instruction_paths 裡有一個非字串：jq 的 @tsv 會中途 abort，若只看輸出不看
+#      退出碼，指令清單會變成空的 → 只改 CLAUDE.md 也會被豁免。
+new_repo exempt-badjson
+stage_files CLAUDE.md
+jq '.docs_only.instruction_paths = [{"oops":1}, ":(glob,icase)**/CLAUDE.md"]' \
+  "$PLUGIN/pipeline-steps.json" > steps-badinstr.json
+rc=$( ( . "$PLUGIN/scripts/pipeline-lib.sh"; PIPELINE_STEPS_JSON="$PWD/steps-badinstr.json" \
+  pipeline_docs_only_exempt commit test >/dev/null 2>&1 ); echo $? )
+[ "$rc" != "0" ] && pass "T3 設定裡有壞元素 → 不豁免（不採信半份清單）" \
+  || fail "T3 jq 中途失敗讓指令清單變空"
+
+# T4 — 大小寫：macOS 的 Claude.md 與 CLAUDE.md 是同一個檔，但 git pathspec 預設分大小寫
+new_repo exempt-case
+stage_files Claude.md
+guard_run pretooluse
+[ "$G_RC" != "0" ] && pass "T4 Claude.md（大小寫變體）仍算指令類" || fail "T4 改個大小寫就免審"
+
+# T5 — 其他 agent 生態的指令目錄
+for f in .cursor/rules/x.md prompts/system.md .github/instructions/y.md .github/prompts/z.prompt.md; do
+  new_repo "exempt-eco-$(echo "$f" | tr '/.' '--')"
+  stage_files "$f"
+  guard_run pretooluse
+  [ "$G_RC" != "0" ] && pass "T5 $f 算指令類" || fail "T5 $f 被當成文件免審"
+done
+
+echo ""
+echo "=== R) 結構不變式：guard 不得自己組合判定順序 ==="
+# 「豁免要同時短路 evidence」以前靠三支 guard 各自記得順序＋註解。改成單一入口之後，
+# 這條測試讓「忘記」會變紅：hooks/ 底下不該再直接出現那兩個函式。
+BAD=$(grep -l -E 'pipeline_eval_gate|pipeline_check_evidence' "$PLUGIN"/hooks/*.sh 2>/dev/null || true)
+[ -z "$BAD" ] && pass "hooks/ 只透過 pipeline_enforce 執法" \
+  || fail "這些 guard 繞過了單一入口：$(echo "$BAD" | tr '\n' ' ')"
 
 cd "$WORK" || exit 1
 echo ""

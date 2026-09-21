@@ -32,7 +32,10 @@ LIB="$(cd "$(dirname "$0")" && pwd)/../scripts/pipeline-lib.sh"
 # shellcheck source=/dev/null
 . "$LIB"
 
-if pipeline_eval_gate "ship" "pre-ship-pipeline"; then
+# Same entry point as the commit guards. Whether /ship ever exempts a docs-only
+# diff is then a data decision (docs_only.gates, which lists commit only today),
+# not something to re-plumb here.
+if pipeline_enforce "ship" "pre-ship-pipeline"; then
   exit 0
 fi
 exit 2

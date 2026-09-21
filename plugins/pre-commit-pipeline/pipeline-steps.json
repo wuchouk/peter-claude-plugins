@@ -32,6 +32,33 @@
     "floor_lines": 40,
     "ratio_percent": 30,
     "max_lines": 200,
-    "exclude_paths": ["docs/**", "TODOS.md", "tasks/todo.md", "CHANGELOG.md"]
+    "exclude_paths": ["docs/*.md", "TODOS.md", "tasks/todo.md", "CHANGELOG.md"]
+  },
+  "_comment_evidence_gates": "Which gates run pipeline_check_evidence. commit only, matching what the guards did before they shared one entry point — /ship never ran it, and switching that on as a side effect of a refactor would be an unrequested tightening. Listed here rather than defaulted in the shell: a list that lives only in code is exactly what the exclude_paths fallback got wrong. An unreadable or non-array value runs the check (strict), so a broken config cannot quietly widen the gate.",
+  "evidence_gates": ["commit"],
+  "_comment_docs_only": "Every staged path in `paths` and none in `instruction_paths` (for a gate listed in `gates`) → the commit gate is skipped entirely, no markers needed, AND the evidence hard-check is skipped with it (otherwise `fix(docs): typo` would still demand a regression test). An empty staged diff is never exempt. Separate from round_drift.exclude_paths, which only asks whether lines count toward drift. Full rationale — why not the old `^docs/` prefix, why instruction markdown is code, why instruction_paths uses :(glob,icase) (one pattern covers top-level AND nested; icase because macOS treats Claude.md and CLAUDE.md as the same file while git pathspec does not), why /ship stays strict — in README §純文件免審.",
+  "docs_only": {
+    "gates": ["commit"],
+    "paths": ["*.md", "*.png", "*.jpg", "*.jpeg", "*.gif", "*.svg", "*.pdf"],
+    "instruction_paths": [
+      ":(glob,icase)**/CLAUDE.md",
+      ":(glob,icase)**/AGENTS*.md",
+      ":(glob,icase)**/GEMINI.md",
+      ":(glob,icase)**/SKILL.md",
+      ":(glob,icase)**/skills/**",
+      ":(glob,icase)**/commands/**",
+      ":(glob,icase)**/agents/**",
+      ":(glob,icase)**/hooks/**",
+      ":(glob,icase)**/prompts/**",
+      ":(glob,icase)**/.claude/**",
+      ":(glob,icase)**/.agents/**",
+      ":(glob,icase)**/.codex/**",
+      ":(glob,icase)**/.cursor/**",
+      ":(glob,icase)**/.github/copilot-instructions.md",
+      ":(glob,icase)**/.github/instructions/**",
+      ":(glob,icase)**/.github/prompts/**",
+      ":(glob,icase)**/.cursorrules",
+      ":(glob,icase)**/.windsurfrules"
+    ]
   }
 }

@@ -68,24 +68,42 @@ LIB="$(cd "$(dirname "$0")" && pwd)/../scripts/pipeline-lib.sh"
 # shellcheck source=/dev/null
 . "$LIB"
 
-if ! pipeline_eval_gate "commit" "pre-commit-pipeline"; then
-  echo "NOTE: this hook blocks the ENTIRE command string before ANY of it runs — if this" >&2
-  echo "command bundled staging/marker steps ahead of 'git commit', those did NOT run." >&2
-  echo "Run them as their own command first, then run 'git commit' by itself." >&2
-  echo "If this is a WIP commit, prefix message with 'WIP:' to bypass." >&2
-  exit 2
-fi
-
-# Evidence + fix-regression hard checks (dual-loop B-2). The git-native
-# commit-msg stage only fires in repos with a .husky/commit-msg anchor, so
-# this PreToolUse layer detects fix commits from the command string instead
-# (-m flag or heredoc body first line).
+# The git-native commit-msg stage only fires in repos with a .husky/commit-msg
+# anchor, so this PreToolUse layer detects fix commits from the command string
+# instead (-m flag or heredoc body first line).
 MSG_GUESS=""
 if printf '%s' "$COMMAND" | grep -qE -- '-m[[:space:]]+["'\'']?fix([(:! ]|$)' \
    || printf '%s\n' "$COMMAND" | grep -qE '^fix([(:! ]|$)'; then
   MSG_GUESS="fix"
 fi
-if ! pipeline_check_evidence "pre-commit-pipeline" "$MSG_GUESS"; then
+
+# The docs-only exemption reads the INDEX, but this hook runs BEFORE git does,
+# and some commit forms commit content the index does not have yet:
+#   -a/--all          stages every tracked change at commit time
+#   -i/--include      adds the named paths on top of the index
+#   -p/--patch        stages interactively during the commit
+#   --amend           the result also carries HEAD's tree
+#   trailing pathspec commits those paths regardless of the index
+# A docs-only index plus `git commit -am "docs: tweak"` would otherwise hand the
+# exemption to a commit that carries source changes. The git-native guard sees
+# the real index (git updates it before pre-commit runs) and is not affected,
+# but it only exists in repos wired for it — covering that gap is this layer's
+# whole reason to exist. Anything we cannot read confidently: no exemption.
+if printf '%s' "$COMMAND" | grep -qE -- '(^|[[:space:]])(-a|--all|-i|--include|-p|--patch|--interactive|--amend)([[:space:]]|$)' \
+   || printf '%s' "$COMMAND" | grep -qE -- '(^|[[:space:]])-[a-zA-Z]*a[a-zA-Z]*([[:space:]]|$)' \
+   || printf '%s' "$COMMAND" | grep -qE 'git commit[^|;&]*[[:space:]]--[[:space:]]'; then
+  PIPELINE_NO_DOCS_EXEMPT=1
+  export PIPELINE_NO_DOCS_EXEMPT
+fi
+
+# Same entry point as the git-native guard, so both layers agree on the order
+# (docs-only exemption → marker gate → evidence). If they disagreed, whichever
+# is stricter silently becomes the real rule.
+if ! pipeline_enforce "commit" "pre-commit-pipeline" "$MSG_GUESS"; then
+  echo "NOTE: this hook blocks the ENTIRE command string before ANY of it runs — if this" >&2
+  echo "command bundled staging/marker steps ahead of 'git commit', those did NOT run." >&2
+  echo "Run them as their own command first, then run 'git commit' by itself." >&2
+  echo "If this is a WIP commit, prefix message with 'WIP:' to bypass." >&2
   exit 2
 fi
 

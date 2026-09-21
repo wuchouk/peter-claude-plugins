@@ -10,6 +10,8 @@ Commit/ship 守門員 plugin。用 hook 機制強制驗證以下 skill 在 commi
 
 Hook 失敗會 block 並透過 stderr 告訴你該跑哪個 skill。補跑 + 用 `pipeline-mark-done` helper 寫 marker 後即可放行。
 
+**純文件的 commit 完全免章**（見下方「純文件免審」）——`/ship` 不在此列。
+
 ## 強制是 git-native 的（跨 agent）
 
 PreToolUse hook 只在 Claude Code 內生效；Codex/Fugu/Conductor 不會跑它。為了讓 commit gate 對**所有 committer**（Claude、Codex、Fugu、Conductor、人手）都生效，真正的地板放在 **git 層**：
@@ -70,8 +72,8 @@ simplify 後面、而且它的章對得上最終 hash，就代表最終內容至
 > 「simplify 沒看過多少內容」＝ 從它的 `staged_tree` 到目前 staged 內容之間的**新增側行數**。
 
 - 只算新增側：被刪掉的行是 simplify **看過**、而且現在已經不存在的內容，不需要再看一次。
-- `round_drift.exclude_paths` 裡的路徑**不計入**（預設 `docs/**`、`TODOS.md`、`tasks/todo.md`、
-  `CHANGELOG.md`）。TODO 帳本與驗證文件依全域規則本來就要跟程式碼同一個 commit 更新，計進去
+- `round_drift.exclude_paths` 裡的路徑**不計入**（預設 `docs/*.md`、`TODOS.md`、`tasks/todo.md`、
+  `CHANGELOG.md`；`docs/*.md` 已經涵蓋巢狀，因為非 glob 的 pathspec 裡 `*` 會跨 `/`）。TODO 帳本與驗證文件依全域規則本來就要跟程式碼同一個 commit 更新，計進去
   等於讓帳本自己觸發重跑。**清單要窄**：第一版寫的是整批 `*.md`，結果讓閘門對「產品本身就是
   markdown」的 repo（就是這一個：`SKILL.md`、各 plugin 的 README）完全失明——簡化完再重寫
   300 行 SKILL.md，drift 算出來是 0。
@@ -93,6 +95,96 @@ commit 當下 formatter 改寫 staged 檔案 → hash 變 → **review 與 tests
 注意 simplify 在這個情境下**也會被擋**，而且不是因為它自己過期：它的背書人（review）同時失效，
 round 的條件 3 不成立，於是退回嚴格比對。round 幫得上的是「review 之後**刻意**改了東西」，不是
 「所有人同時被 formatter 掃到」。
+
+## 純文件免審（`docs_only`）
+
+staged 的**每一個**路徑都命中 `docs_only.paths`、且**沒有**任何一個命中
+`docs_only.instruction_paths` 時，commit gate 直接放行，**不需要任何章**。只要有一個不符合，
+就照常走完整判定。空的 staged diff 不豁免。
+
+放行時會在 stderr 印一行 `docs-only staged diff — gate skipped（沒有任何檔案落在 docs_only.paths 之外）`，因為一個安靜的
+豁免和一個壞掉的閘門長得一模一樣。差一點就免審時（全部是文件形狀、但其中有指令類）也會印出
+是**哪些檔**讓它不算純文件。
+
+**豁免同時短路 evidence 硬檢查**，這是刻意的：否則 `fix(docs): 錯字` 仍會被要求補 regression
+test，舊的 `.tests` marker 也仍會要求它的證據檔案存在——那就等於沒豁免。短路只發生在「已經
+判定為純文件」之後，非純文件的 commit 沒有任何路徑能跳過 evidence。
+
+這個順序（豁免 → marker gate → evidence）住在 `pipeline_enforce()` 一個地方，三支 guard 只呼叫
+它、各自保留自己的 exit code 與後續建議。之前是三支各自照順序呼叫兩三個函式＋註解提醒，靠的是
+「記得」。兩層測試守著：情境 R 用 grep 斷言 `hooks/` 底下不再直接出現 `pipeline_eval_gate`／
+`pipeline_check_evidence`（擋「繞過單一入口」），S1–S3 則讓 evidence 真的執行並斷言三種結果
+（擋「順序被改壞」）。R 單獨擋不住順序問題——把 evidence 搬到豁免之前，R 照樣綠。
+
+### 這不是舊的 `^docs/` 規則
+
+改版前 `pipeline_eval_gate` 有一個 `docs_only` 判斷，用的是 regex `^docs/|\.md$`，而且它只豁免
+5 秒批次檢查、不是免章（實務效果是純文件一口氣連蓋三個章就過——形式上要求、實質上不檢查）。
+2026-09-20 改成誠實的規則時**沒有沿用那個 regex**，因為它有兩個洞：
+
+- `^docs/` 把 `docs/` 底下的**所有**檔案都當文件。platform 的 `docs/` 底下有 644 個非 `.md`
+  檔案，包含 16 個 `.ts` 與 59 個 `.json`——其中 `docs/verification/config.yaml` 正是驅動
+  evidence 規則的設定檔。豁免掉 5 秒檢查無傷大雅，完全免章就是洞。
+- `\.md$` 把**所有** markdown 都當文件，包括 `CLAUDE.md`、`SKILL.md` 這些「就是 agent 指令」
+  的檔案。改 agent 的行為規則正是最該被審的那種改動。
+
+所以 `paths` 只收 markdown 加惰性素材（圖片、PDF），`instruction_paths` 再把指令類扣掉。
+
+`*.txt` 進過初稿又拿掉了：`requirements.txt` 是依賴清單，不是文件。抓到它的是
+`test-post-restart.sh` 的 installer 情境——它拿 `a.txt` 當一般檔案，於是「未跑 pipeline 卻
+commit 成功」突然變紅。情境 Q15 現在守著這條。
+
+### 指令類清單（寧可寬，不可窄）
+
+| 樣式 | 為什麼 |
+|---|---|
+| `:(glob,icase)**/CLAUDE.md`、`:(glob,icase)**/AGENTS*.md`、`:(glob,icase)**/GEMINI.md` | agent 規則本身；`AGENTS*.md` 才蓋得到 `AGENTS-reference.md`。用 `:(glob)` 而不是 `*CLAUDE.md`，後者會連 `NOTCLAUDE.md` 一起命中 |
+| `:(glob,icase)**/SKILL.md` | 外掛 repo 的 59 個 `.md` 裡有 13 個是它 |
+| `:(glob,icase)**/skills/**` | `:(glob)` magic 下 `**/` 可以匹配零層目錄，一條就同時蓋頂層與巢狀；`icase` 是因為 macOS 把 `Claude.md` 與 `CLAUDE.md` 當同一個檔，而 git pathspec 預設分大小寫。不加 `:(glob)` 的話 `**/skills/**` 命中不到頂層 `skills/`（`~/.agents` 就是這種結構），要寫成兩條 |
+| `:(glob,icase)**/commands/**`、`agents/**`、`hooks/**` | slash command、subagent、hook 的定義；也涵蓋 `skills/*/references/*.md` 這種被 skill 載入的參考檔 |
+| `:(glob,icase)**/.claude/**`、`.agents/**`、`.codex/**` | 專案層級的 agent 設定。`:(glob)` 在這裡不只是精簡：舊的 `.claude/**` 只命中頂層，monorepo 的 `apps/x/.claude/skills/**` 會整個漏掉 |
+| `:(glob,icase)**/prompts/**`、`:(glob,icase)**/.cursor/**` | 其他 agent 生態的指令目錄 |
+| `:(glob,icase)**/.github/copilot-instructions.md`、`.github/instructions/**`、`.github/prompts/**`、`.cursorrules`、`.windsurfrules` | 目前沒有，先納管。單檔收了、同族的目錄形式也要收 |
+
+### 與 `round_drift.exclude_paths` 的差別
+
+兩份清單長得像，問的問題不同，所以**刻意分開**：
+
+| | 問的問題 | 例子 |
+|---|---|---|
+| `docs_only.paths` | 這個 commit 整體需不需要被審？ | 只改 `TODOS.md` → 免審 |
+| `round_drift.exclude_paths` | 算「simplify 沒看過多少」時，這些行算不算？ | 程式碼 commit 附帶的 `TODOS.md` → 不計入 |
+
+所以 `*.md` 在前者是文件、在後者**絕不能**整批排除（那正是 2026-09-20 修掉的 `SKILL.md` 盲點）。
+反過來，`exclude_paths` 原本的 `docs/**` 也有同一個洞的小型版——simplify 蓋章後改 300 行
+`docs/tools/gen.ts`，drift 會算成 0。同批收窄成 `docs/*.md`。
+
+**但要誠實記一筆**：兩份清單問的問題不同，**盲點卻是共用的**。「markdown 不等於文件」這個教訓
+在這裡修了兩次（2026-09-20 的 `SKILL.md`、這次的 `docs/**`），因為同一個判斷散在兩份資料裡。
+長期該做的是一份路徑分類（`doc` / `asset` / `instruction`），兩個政策各自選集合——見 Roadmap B。
+
+### 豁免自己的防線
+
+這個判定的工作是**把閘門關掉**，所以每一種「讀不出來」都必須當成「不豁免」：
+
+- **git 或 jq 失敗一律不豁免**。三個探針都檢查退出碼而不是只看輸出是否為空。少了這層，
+  `instruction_paths` 裡放一個非字串會讓 jq 的 `@tsv` 中途 abort、指令清單看起來是空的，
+  於是只改 `CLAUDE.md` 也會被豁免。
+- **git 太舊（不支援 `:(exclude)`／`:(glob)`，< 1.9）也不豁免**。那種 git 會拒絕每一條
+  pathspec，「沒有輸出」若被讀成「沒有非文件檔」，純程式碼的 commit 會被判成純文件並整個放行。
+  退出碼檢查已經擋得住這條，開頭的 magic 探針是第二層。
+- **PreToolUse 層遇到 `-a`／`--amend`／`-i`／`-p`／尾隨 pathspec 時不豁免**。那一層在 git
+  之前執行、只看得到 index，而這些形式會把 index 以外的內容放進 commit：docs-only 的 index
+  加上 `git commit -am` 曾經讓帶著程式碼的 commit 整個免審。git-native 層看到的是 git 已經
+  更新過的 index，不受影響。
+
+情境 T1–T5 守著這五條，每一條都做過突變驗證。
+
+### `/ship` 不豁免
+
+`gates` 只列 `commit`。理由：`/ship` 是正式發佈，設計上連 `WIP:` 後門都沒有；而 `tidy_docs`
+正好是純文件改動**最相關**的一關，在那裡豁免等於在最該檢查的時候不檢查。要改的話改
+`docs_only.gates` 這個資料，不必動 shell。
 
 ## 為什麼拿掉 5 秒批次規則
 
@@ -208,7 +300,14 @@ claude plugins install pre-commit-pipeline@peter-claude-plugins
    大概是讓文件類變動不影響程式碼步驟的章，但那要先想清楚「文件變動」的界線。
 4. **二進位檔的變動不計入變動量**（numstat 對二進位檔回報 `-`）。實務上 staged 二進位檔多半是
    截圖／測試素材，不是 simplify 要看的東西。
-5. **變動量只看行數，不看性質**：30 行的核心邏輯改寫和 30 行的字串常數變動一樣計。要分辨性質
+5. **`*.svg` 被當成惰性素材**，但 SVG 技術上可以內嵌 script。這裡只是「免審」不是「會被執行」，
+   風險低；文件配圖是常態，為它加檢查不划算。
+6. **`docs_only` 的判定只看路徑，不看內容**。一份 `docs/guide.md` 裡貼滿可執行指令、或一個
+   名為 `notes.md` 的 symlink 指向別處，都會被當成文件放行。要再往下收就得讀內容，那不是 hook
+   該做的事。
+7. **指令類清單是 plugin 全域的**，各 repo 沒辦法補自己的特殊結構（`docs/skill-refs/*.md`
+   之類）。要調整只能改 plugin 這份，權威來源下放到各 repo 的想法記在 Roadmap B。
+8. **變動量只看行數，不看性質**：30 行的核心邏輯改寫和 30 行的字串常數變動一樣計。要分辨性質
    就得真的理解程式碼，那是 agent 的工作，不是 hook 的工作（hook 內有 120 秒預算，且不能 spawn
    agent CLI）。
 
@@ -236,11 +335,32 @@ bash <這個外掛>/test-post-restart.sh          # hook 端點 + mark-done 寫�
 | G | simplify 章超過 24 小時 | 擋下 |
 | H | round 步驟後面沒有 content 步驟 | 退回嚴格比對 |
 | I | ship gate 的 document_release 過期 | 擋下（尾端步驟不放寬） |
-| J1 | simplify 之後只動 `exclude_paths` 裡的檔案（`docs/**`、`TODOS.md`） | 放行（不計入變動量） |
+| J1 | simplify 之後只動 `exclude_paths` 裡的檔案（`docs/*.md`、`TODOS.md`） | 放行（不計入變動量） |
 | J2 | simplify 之後重寫 300 行 `SKILL.md`（沒被排除的產品內容） | 擋下（第一版整批排除 `*.md` 時會放行） |
 | M | 以刪除為主的修正（新增 5 行、刪除 248 行） | 放行（只算新增側；改成加總側這條會紅） |
 | N | `exclude_paths` 是 `[]`／字串／物件，`round_drift` 的值不是整數 | 退回預設，閘門不能自己炸（bash 3.2 的空陣列展開） |
 | O | index 有衝突讓 `git write-tree` 失敗 | `staged_tree` 被刪掉，不沿用上一輪的值 |
+| Q1 | 全 `docs/*.md`、零個章 | 放行並印說明 |
+| Q2 | 純文件混一個 `.ts` | 照常擋 |
+| Q3/4/9 | `CLAUDE.md`／巢狀 `skills/**/SKILL.md`／頂層 `skills/*.md`／`apps/x/.claude/skills/**`／`docs/AGENTS.md` | 都擋，訊息指名該檔 |
+| Q5 | 舊 JSON 沒有 `docs_only` 鍵 | 不豁免、不報錯 |
+| Q6 | 真實 `git commit` 一正一反 | 純文件過、混程式碼擋 |
+| Q7 | PreToolUse 與 git-native 兩條路徑 | 行為一致 |
+| Q8/15 | `docs/tools/gen.ts`／`docs/verification/config.yaml`／`requirements.txt` | 都擋（舊 `^docs/` 與 `*.txt` 的洞） |
+| Q10 | `.md` 配一張 `.png` | 放行 |
+| Q11 | 同一份 docs-only diff 送 commit 與 ship | commit 放行、ship 擋下 |
+| Q11b | `docs_only.gates` 加入 `ship` | ship 也豁免（證明接線是活的，不是死碼） |
+| Q12–Q13 | 2026-09-20 的兩個真實案例（`~/.agents` 改 `AGENTS*.md`／platform 純文件含 svg） | 擋／放行 |
+| Q14 | simplify 後改 300 行 `docs/tools/gen.ts` | 計入變動量並擋下 |
+| S1–S3 | 讓 evidence 真的有東西可擋：純文件豁免／commit gate／ship gate | 放行／擋下／放行 |
+| S4 | 刪掉 `exclude_paths` 鍵 | 什麼都不排除（不得有硬編 fallback） |
+| S5 | 空的 staged diff | 不豁免 |
+| S6 | `evidence_gates` 型別壞掉 | 仍跑 evidence（fail-closed） |
+| T1 | 帶 `-a`／`--amend`／`-i`／尾隨 pathspec 的 commit 形式（index 之外的內容） | 都不吃豁免 |
+| T2 | git 不支援 `:(exclude)`／`:(glob)` | 不豁免（fail-closed） |
+| T3 | `instruction_paths` 裡有非字串 | 不豁免（不採信半份清單） |
+| T4–T5 | `Claude.md` 大小寫變體／`.cursor/rules`、`prompts/`、`.github/instructions` | 都算指令類 |
+| R | `hooks/` 直接呼叫 `pipeline_eval_gate`／`pipeline_check_evidence` | 變紅（不得繞過單一入口） |
 | K | 三個章同秒連打 | 放行（5 秒規則已移除） |
 | L | `staged_tree` 指向已不存在的物件 | 擋下（算不出變動量就退回嚴格，不 fail open） |
 
@@ -286,9 +406,18 @@ cache 副本，而它在 git 之前就擋——不同步的話會變成 git 層�
     （`"simplify": {"binding":"round","vouched_by":["review"]}`），或抽一份 canonical 的有序
     `steps` 清單、各 gate 只列子集。沒做的理由：目前只有一個 round 步驟、一個背書人，先讓規則
     落地收集實際誤判再改結構。
-  - **drift 的路徑分類是 plugin 全域的**，而 `pipeline_check_evidence()` 已經會讀專案的
-    `docs/verification/config.yaml` `layers.*.paths` 來分類 staged 路徑。同一個 lib 裡有兩套
-    路徑分類，長期該合併成一套（讓 drift 重用專案自己的定義，而不是 plugin 猜）。
+  - **同一個 lib 裡現在有三套路徑分類**：`round_drift.exclude_paths`（算不算 drift）、
+    `docs_only`（要不要審）、以及 `pipeline_check_evidence()` 讀專案 `docs/verification/config.yaml`
+    的 `layers.*.paths`（要不要證據）。三套問的是不同政策問題，但分類本身應該只有一份：
+    `path_classes: {doc, asset, instruction}`，各政策選自己要的集合。這樣「markdown 不等於文件」
+    這種教訓只需要修一個地方（目前修了兩次）。
+  - **而且兩套 matcher 語意相反**：drift 與 docs_only 走 git pathspec，evidence 走
+    `pipeline_check_evidence()` 裡的 Python `rx()`。同一個字串在兩邊意思不同——`*.md` 在 git
+    命中 `docs/a.md`、在 `rx()` 不命中；`**/skills/**` 在 git 不加 `:(glob)` 命中不到頂層、在
+    `rx()` 命中。要收斂就全部走 git pathspec（統一加 `:(glob)`），Python 只負責讀 YAML。
+  - **`instruction_paths` 硬編在 plugin 層**，對所有 repo 生效。知道 `prompts/`、
+    `docs/skill-refs/*.md` 算不算指令的是 repo 不是 plugin；權威來源應該下放到各 repo 的
+    `docs/verification/config.yaml`，plugin 這份當**地板**（repo 只能加不能減）。
   - **`staged_tree` 與 `staged_hash` 是同一個概念的兩個欄位**：tree OID 本身就是 index 的正規
     內容雜湊，可比較也可 diff，理論上能取代 `staged_hash` 並讓 `compute-staged-hash.sh` 整支
     消失。沒做的理由：那會改變 marker 格式，而這次的硬性限制是對進行中 session 的舊 state
