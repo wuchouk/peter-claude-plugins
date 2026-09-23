@@ -3,7 +3,7 @@
 # Source this from guards / mark-done so the step list lives in ONE place.
 #
 # Provides:
-#   pipeline_gate_steps <gate>        → space-separated canonical step keys for a gate (commit|ship)
+#   pipeline_gate_steps <gate>        → space-separated canonical step keys for a gate (commit)
 #   pipeline_resolve_alias <input>    → canonical step key for an alias, or "" if unknown
 #   pipeline_step_help <step> <mark>  → human help line ({MARK} replaced by <mark>), or "" if none
 #   pipeline_step_binding <step>      → "round" or "content" (default)

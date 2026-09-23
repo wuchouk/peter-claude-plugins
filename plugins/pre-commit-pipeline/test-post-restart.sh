@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # test-post-restart.sh — 全棧驗證腳本（在新 Claude session 重啟後跑）
 #
-# 用途：驗證 plugin 真的被 Claude Code 載入、hooks 真的會在 git commit / /ship 時觸發。
+# 用途：驗證 plugin 真的被 Claude Code 載入、hooks 真的會在 git commit 時觸發。
 # 這個 script 模擬 hook 從各種 payload 接收的情境，**不靠 Claude harness**。
 #
 # 使用：bash ~/peter-claude-plugins/plugins/pre-commit-pipeline/test-post-restart.sh
@@ -11,13 +11,12 @@ set -euo pipefail
 # checkout 的舊版（先前寫死 $HOME 路徑，在 worktree 改完跑這支會看到假的綠燈）。
 PLUGIN="${PIPELINE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 COMMIT_HOOK="$PLUGIN/hooks/pre-commit-guard.sh"
-SHIP_HOOK="$PLUGIN/hooks/pre-ship-guard.sh"
 SESSION_HOOK="$PLUGIN/hooks/session-pipeline-status.sh"
 MARK="$PLUGIN/scripts/pipeline-mark-done.sh"
 
 D="/tmp/pipeline-postrestart-$$"
-# .claude/ 是納管的 opt-in 條件（pre-commit-guard.sh 與 git-commit-msg-guard.sh 檢查它；
-# pre-ship-guard.sh 不檢查）。少了它整個工作區不受 commit gate 管，前兩個 case 會拿到
+# .claude/ 是納管的 opt-in 條件（pre-commit-guard.sh 與 git-commit-msg-guard.sh 檢查它）。
+# 少了它整個工作區不受 commit gate 管，前兩個 case 會拿到
 # exit 0 而不是預期的擋下 —— 這支腳本從 opt-in 條件加入後就一直在 Test 2 紅著，
 # 沒人跑也就沒人發現（和 Test 3/5 是同一類漏更新）。
 mkdir -p "$D/.claude" && cd "$D"
@@ -54,31 +53,19 @@ rc=$(echo '{"tool_input":{"command":"git commit -m \"feat: x\""}}' | bash "$COMM
 [ "$rc" = "2" ] && pass "stale hash invalidates" || fail "expected exit 2, got $rc"
 
 echo ""
-echo "=== Test 5: /ship 需 5 markers ==="
+echo "=== Test 5: 對新內容重蓋 3 marker → 放行 ==="
+# Test 4 讓章過期；對目前內容重蓋後要能再次放行。
+# （原本的 Test 5/6 測 /ship gate，2026-09-23 隨 pre-ship-guard.sh 一起移除。）
 bash "$MARK" simplify > /dev/null
 bash "$MARK" review > /dev/null
 bash "$MARK" verify-tests > /dev/null
-# 故意不寫 document-release
-rc=$(echo '{"tool_input":{"command":"/ship"}}' | bash "$SHIP_HOOK" 2>/dev/null ; echo "$?")
-[ "$rc" = "2" ] && pass "missing doc-release blocks ship" || fail "expected exit 2, got $rc"
-
-# ship gate 要的是 pipeline-steps.json 的 gates.ship —— 現在是 5 步（多了 tidy_docs）。
-# 這裡原本只補到 document-release 就期望放行，是設定加了步驟、測試沒跟上。
-bash "$MARK" document-release > /dev/null
-bash "$MARK" tidy-docs > /dev/null
-rc=$(echo '{"tool_input":{"command":"/ship"}}' | bash "$SHIP_HOOK" 2>/dev/null ; echo "$?")
-[ "$rc" = "0" ] && pass "all ship markers pass ship hook" || fail "expected exit 0, got $rc"
-
-echo ""
-echo "=== Test 6: ship 內部 commit 過 bash hook ==="
-# /ship 內部會跑 git commit，bash hook 只看 3 marker 仍 OK
 rc=$(echo '{"tool_input":{"command":"git commit -m \"chore: bump version\""}}' | bash "$COMMIT_HOOK" 2>/dev/null ; echo "$?")
-[ "$rc" = "0" ] && pass "ship-internal commit passes" || fail "expected exit 0, got $rc"
+[ "$rc" = "0" ] && pass "re-marked commit passes" || fail "expected exit 0, got $rc"
 
 echo ""
 echo "=== Test 7a: SessionStart 在 dirty repo + 新 marker 靜默 ==="
 out=$(bash "$SESSION_HOOK" 2>&1)
-# 剛跑完 Test 5/6 寫進 marker，AGE < 24h，dirty 但靜默
+# 剛跑完 Test 5 寫進 marker，AGE < 24h，dirty 但靜默
 [ -z "$out" ] && pass "fresh markers → silent" || fail "expected silent, got: $out"
 
 echo ""

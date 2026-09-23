@@ -1,16 +1,17 @@
 # pre-commit-pipeline
 
-Commit/ship 守門員 plugin。用 hook 機制強制驗證以下 skill 在 commit/ship 前都跑過：
+Commit 守門員 plugin。用 hook 機制強制驗證以下 skill 在 commit 前都跑過：
 
 | Hook 觸發點 | 檢查的 marker |
 |------------|---------------|
 | `git commit`（PreToolUse Bash，Claude only） | `simplify`、`review`、`verify-tests` |
 | `git commit`（**git-native, 所有 agent**） | 同上（見下方 git-native 層） |
-| `/ship`（PreToolUse SlashCommand） | 上面三個 + `document-release` + `tidy_docs` |
 
 Hook 失敗會 block 並透過 stderr 告訴你該跑哪個 skill。補跑 + 用 `pipeline-mark-done` helper 寫 marker 後即可放行。
 
-**純文件的 commit 完全免章**（見下方「純文件免審」）——`/ship` 不在此列。
+**純文件的 commit 完全免章**（見下方「純文件免審」）。
+
+原本還有一道 `/ship` gate，2026-09-23 移除，理由見下方「為什麼拿掉 /ship gate」。
 
 ## 強制是 git-native 的（跨 agent）
 
@@ -31,12 +32,11 @@ PreToolUse hook 只在 Claude Code 內生效；Codex/Fugu/Conductor 不會跑它
 
 ## 步驟順序與綁定規則
 
-`pipeline-steps.json` 的 `gates` 陣列順序**就是**步驟順序（simplify → review → tests →
-document_release → tidy_docs），`binding` 決定每個步驟的章要用哪種方式對上目前的 staged 內容：
+`pipeline-steps.json` 的 `gates` 陣列順序**就是**步驟順序（simplify → review → tests），`binding` 決定每個步驟的章要用哪種方式對上目前的 staged 內容：
 
 | binding | 意思 | 誰是這種 |
 |---------|------|---------|
-| `content`（預設，沒列到的一律是這種） | 章的 `staged_hash` 必須**等於**目前 staged hash | review、tests、document_release、tidy_docs |
+| `content`（預設，沒列到的一律是這種） | 章的 `staged_hash` 必須**等於**目前 staged hash | review、tests |
 | `round` | 上面那條成立就算數；否則只要是**同一輪**做的、**後面**有綁內容的步驟替最終內容背書、且它沒看過的變動量在上限內，也算數 | simplify |
 
 ### 為什麼需要 round
@@ -59,8 +59,8 @@ simplify 後面、而且它的章對得上最終 hash，就代表最終內容至
    commit 的章替下一個 commit 掛保證。
 2. 章在 24 小時內，且時間戳解析得出來。
 3. 同一個 gate 裡，它**後面**有綁 `content` 的步驟，且那個步驟對得上目前 hash。
-   `gates.ship` 的 `document_release`／`tidy_docs` 排在最後、後面沒有人，所以它們永遠是
-   `content`——尾端步驟沒有下游能替它們背書。
+   排在 gate 最後的步驟後面沒有人，就算設成 `round` 也會退回 `content`——尾端步驟沒有下游
+   能替它背書（情境 H）。
 4. 章裡有 `staged_tree`（見下方 Marker 檔）。沒有就沒辦法算變動量。
 5. 變動量在上限內。
 
@@ -110,7 +110,7 @@ staged 的**每一個**路徑都命中 `docs_only.paths`、且**沒有**任何�
 test，舊的 `.tests` marker 也仍會要求它的證據檔案存在——那就等於沒豁免。短路只發生在「已經
 判定為純文件」之後，非純文件的 commit 沒有任何路徑能跳過 evidence。
 
-這個順序（豁免 → marker gate → evidence）住在 `pipeline_enforce()` 一個地方，三支 guard 只呼叫
+這個順序（豁免 → marker gate → evidence）住在 `pipeline_enforce()` 一個地方，兩支 guard 只呼叫
 它、各自保留自己的 exit code 與後續建議。之前是三支各自照順序呼叫兩三個函式＋註解提醒，靠的是
 「記得」。兩層測試守著：情境 R 用 grep 斷言 `hooks/` 底下不再直接出現 `pipeline_eval_gate`／
 `pipeline_check_evidence`（擋「繞過單一入口」），S1–S3 則讓 evidence 真的執行並斷言三種結果
@@ -180,11 +180,20 @@ commit 成功」突然變紅。情境 Q15 現在守著這條。
 
 情境 T1–T5 守著這五條，每一條都做過突變驗證。
 
-### `/ship` 不豁免
+## 為什麼拿掉 /ship gate
 
-`gates` 只列 `commit`。理由：`/ship` 是正式發佈，設計上連 `WIP:` 後門都沒有；而 `tidy_docs`
-正好是純文件改動**最相關**的一關，在那裡豁免等於在最該檢查的時候不檢查。要改的話改
-`docs_only.gates` 這個資料，不必動 shell。
+原本 `hooks.json` 用 PreToolUse matcher `SlashCommand` 呼叫 `pre-ship-guard.sh`，要求
+`gates.ship` 的五個章（commit 的三個 + `document_release` + `tidy_docs`）才放行 `/ship`。
+2026-09-23 的 prompt audit 查 transcript 發現：現在的 Claude Code 是透過 Skill tool
+（`{"skill":"ship"}`）呼叫 `/ship`，transcript 裡沒有任何 `SlashCommand` 呼叫，所以這道 gate
+**從來沒觸發過**；而這段期間也沒有感覺到有東西因此漏掉。於是整道刪掉，而不是改接 Skill matcher：
+
+- 刪掉的：`hooks.json` 的 `SlashCommand` 項目、`hooks/pre-ship-guard.sh`、`pipeline-steps.json`
+  的 `gates.ship`，以及只在 ship gate 缺章時才會印出的 `help.document_release`／`help.tidy_docs`。
+- 留著的：`aliases` 裡的 `document-release`／`tidy-docs`。`tidy-docs` skill 仍會呼叫
+  `pipeline-mark-done.sh tidy-docs`，拿掉 alias 會讓那一步報錯。這些章照樣寫得進 state 檔，
+  只是目前沒有任何 gate 讀它們。
+- commit gate 完全不變：`evidence_gates`、`docs_only.gates` 仍只列 `commit`。
 
 ## 為什麼拿掉 5 秒批次規則
 
@@ -230,7 +239,6 @@ cache 都會擋；docs-only 的 staged diff 則本來就豁免。）把 cache �
 
 - **`skills/verify-tests/`** — 新 skill。分析 staged diff 判斷該跑哪些 unit / integration / e2e 測試。
 - **`hooks/pre-commit-guard.sh`** — 攔 git commit，3-marker 檢查。`WIP:` / `wip:` / `backup:` 開頭的 commit message 自動放行。
-- **`hooks/pre-ship-guard.sh`** — 攔 `/ship`，5-marker 檢查（加 document-release + tidy_docs）。
 - **`hooks/session-pipeline-status.sh`** — SessionStart 靜默提示，dirty diff + stale marker 才印一行。
 - **`scripts/pipeline-mark-done.sh`** — Claude 跑完 skill 後手動呼叫，寫 marker 進 `.claude/pipeline-state.json`。
 - **`scripts/install-git-hook.sh`** — 讓沒有 husky 的 repo 也在 git 層受管（`--uninstall` 反安裝）。不覆蓋既有 hook。
@@ -255,8 +263,7 @@ claude plugins install pre-commit-pipeline@peter-claude-plugins
   "simplify":         { "done_at": "...", "first_marked_at": "...", "first_marked_head": "...", "staged_hash": "...", "staged_tree": "..." },
   "review":           { "done_at": "...", "first_marked_at": "...", "first_marked_head": "...", "staged_hash": "...", "staged_tree": "..." },
   "tests":            { "verified_at": "...", "first_marked_at": "...", "first_marked_head": "...", "staged_hash": "...", "staged_tree": "...",
-                        "decisions": [...], "evidence_required": ["render"], "evidence": {...}, "regression": {...} },
-  "document_release": { "done_at": "...", "first_marked_at": "...", "first_marked_head": "...", "staged_hash": "...", "staged_tree": "..." }
+                        "decisions": [...], "evidence_required": ["render"], "evidence": {...}, "regression": {...} }
 }
 ```
 
@@ -280,8 +287,6 @@ claude plugins install pre-commit-pipeline@peter-claude-plugins
 3. /review             → pipeline-mark-done review
 4. /verify-tests       → skill 自帶寫 marker
 5. git commit          → pre-commit-guard 放行 ✓
-6. /document-release   → pipeline-mark-done document-release
-7. /ship               → pre-ship-guard 放行 ✓
 ```
 
 第 3 步的 review 如果改了東西（正常情況），**不需要回頭重跑 simplify**：review 與 tests 的章對得上最終內容，simplify 走 `round` 判定即可。只有在 simplify 之後的新增超過 `round_drift` 的上限時才會要求重跑，訊息會印出實際數字與上限。
@@ -295,19 +300,16 @@ claude plugins install pre-commit-pipeline@peter-claude-plugins
 1. **變動量上限之內的內容，simplify 沒看過**（review 看過）。這是 `round` 的定義本身，不是 bug。
    上限就是在框這個缺口的大小。
 2. **沒跑步驟就蓋章，完全擋不住**（詳見「為什麼拿掉 5 秒批次規則」與 Roadmap 方案 A）。
-3. **ship gate 的連鎖過期沒有解**：`/document-release` 產生的文件變動會讓 review 與 tests 的章
-   過期、需要重蓋。它們是 `content` 綁定，而文件變動也算內容變動。這是現狀，這次沒動——改法
-   大概是讓文件類變動不影響程式碼步驟的章，但那要先想清楚「文件變動」的界線。
-4. **二進位檔的變動不計入變動量**（numstat 對二進位檔回報 `-`）。實務上 staged 二進位檔多半是
+3. **二進位檔的變動不計入變動量**（numstat 對二進位檔回報 `-`）。實務上 staged 二進位檔多半是
    截圖／測試素材，不是 simplify 要看的東西。
-5. **`*.svg` 被當成惰性素材**，但 SVG 技術上可以內嵌 script。這裡只是「免審」不是「會被執行」，
+4. **`*.svg` 被當成惰性素材**，但 SVG 技術上可以內嵌 script。這裡只是「免審」不是「會被執行」，
    風險低；文件配圖是常態，為它加檢查不划算。
-6. **`docs_only` 的判定只看路徑，不看內容**。一份 `docs/guide.md` 裡貼滿可執行指令、或一個
+5. **`docs_only` 的判定只看路徑，不看內容**。一份 `docs/guide.md` 裡貼滿可執行指令、或一個
    名為 `notes.md` 的 symlink 指向別處，都會被當成文件放行。要再往下收就得讀內容，那不是 hook
    該做的事。
-7. **指令類清單是 plugin 全域的**，各 repo 沒辦法補自己的特殊結構（`docs/skill-refs/*.md`
+6. **指令類清單是 plugin 全域的**，各 repo 沒辦法補自己的特殊結構（`docs/skill-refs/*.md`
    之類）。要調整只能改 plugin 這份，權威來源下放到各 repo 的想法記在 Roadmap B。
-8. **變動量只看行數，不看性質**：30 行的核心邏輯改寫和 30 行的字串常數變動一樣計。要分辨性質
+7. **變動量只看行數，不看性質**：30 行的核心邏輯改寫和 30 行的字串常數變動一樣計。要分辨性質
    就得真的理解程式碼，那是 agent 的工作，不是 hook 的工作（hook 內有 120 秒預算，且不能 spawn
    agent CLI）。
 
@@ -334,7 +336,6 @@ bash <這個外掛>/test-post-restart.sh          # hook 端點 + mark-done 寫�
 | F | simplify 之後改動超過上限 | 擋下並印出行數與上限 |
 | G | simplify 章超過 24 小時 | 擋下 |
 | H | round 步驟後面沒有 content 步驟 | 退回嚴格比對 |
-| I | ship gate 的 document_release 過期 | 擋下（尾端步驟不放寬） |
 | J1 | simplify 之後只動 `exclude_paths` 裡的檔案（`docs/*.md`、`TODOS.md`） | 放行（不計入變動量） |
 | J2 | simplify 之後重寫 300 行 `SKILL.md`（沒被排除的產品內容） | 擋下（第一版整批排除 `*.md` 時會放行） |
 | M | 以刪除為主的修正（新增 5 行、刪除 248 行） | 放行（只算新增側；改成加總側這條會紅） |
@@ -348,11 +349,10 @@ bash <這個外掛>/test-post-restart.sh          # hook 端點 + mark-done 寫�
 | Q7 | PreToolUse 與 git-native 兩條路徑 | 行為一致 |
 | Q8/15 | `docs/tools/gen.ts`／`docs/verification/config.yaml`／`requirements.txt` | 都擋（舊 `^docs/` 與 `*.txt` 的洞） |
 | Q10 | `.md` 配一張 `.png` | 放行 |
-| Q11 | 同一份 docs-only diff 送 commit 與 ship | commit 放行、ship 擋下 |
-| Q11b | `docs_only.gates` 加入 `ship` | ship 也豁免（證明接線是活的，不是死碼） |
+| Q11 | `docs_only.gates` 拿掉 `commit` | 不豁免（證明接線是活的，不是死碼） |
 | Q12–Q13 | 2026-09-20 的兩個真實案例（`~/.agents` 改 `AGENTS*.md`／platform 純文件含 svg） | 擋／放行 |
 | Q14 | simplify 後改 300 行 `docs/tools/gen.ts` | 計入變動量並擋下 |
-| S1–S3 | 讓 evidence 真的有東西可擋：純文件豁免／commit gate／ship gate | 放行／擋下／放行 |
+| S1–S3 | 讓 evidence 真的有東西可擋：純文件豁免／commit gate／`evidence_gates` 不列 commit | 放行／擋下／放行（證明接線是活的） |
 | S4 | 刪掉 `exclude_paths` 鍵 | 什麼都不排除（不得有硬編 fallback） |
 | S5 | 空的 staged diff | 不豁免 |
 | S6 | `evidence_gates` 型別壞掉 | 仍跑 evidence（fail-closed） |
@@ -400,9 +400,8 @@ cache 副本，而它在 git 之前就擋——不同步的話會變成 git 層�
   - 原本記著「使用者要求 `shipit`/`afk`/`end` 維持現有 scope，故未動」——**該約束 2026-07-29 起已不成立**，`shipit` 當日為了偵測 repo 自有 ship 機制而改過 step 4/7。現在缺的是決定，不是阻礙。
   - 這個 repo 沒有 TODO 帳本，所以這一段就是帳本。為了讓下次回來時不用重新想，缺的決定寫成三個具體選項：(1) **誰寫入**——`shipit` orchestrator，還是一支包住 `/simplify`／`/review` 的 wrapper skill？(2) **evidence 的 schema**——沿用 `tests` 的 `evidence`／`decisions[]` 形狀，記「查了哪些檔案／哪幾條規則」，還是只記一個 agent session id？(3) **無產出時怎麼過**——沿用 `decisions[] {status: skipped, reason}`，還是要求至少列出檢查清單。
 - **B — round 綁定的四個已知弱點**（2026-09-20 的 review 提出，當次評估後延後，理由寫在這裡以免下次重新想一遍）：
-  - **背書關係是隱含的**：「後面有 content 步驟」靠 `gates` 陣列位置推導，而順序被重複寫在
-    `gates.commit` 與 `gates.ship` 兩個陣列裡；日後往 `gates.commit` 尾端加一個 `lint`，`lint`
-    就自動變成 simplify 的背書人，即使它根本不看程式碼品質。更深的做法是把關係寫成資料
+  - **背書關係是隱含的**：「後面有 content 步驟」靠 `gates` 陣列位置推導；日後往
+    `gates.commit` 尾端加一個 `lint`，`lint` 就自動變成 simplify 的背書人，即使它根本不看程式碼品質。更深的做法是把關係寫成資料
     （`"simplify": {"binding":"round","vouched_by":["review"]}`），或抽一份 canonical 的有序
     `steps` 清單、各 gate 只列子集。沒做的理由：目前只有一個 round 步驟、一個背書人，先讓規則
     落地收集實際誤判再改結構。
@@ -422,10 +421,17 @@ cache 副本，而它在 git 之前就擋——不同步的話會變成 git 層�
     內容雜湊，可比較也可 diff，理論上能取代 `staged_hash` 並讓 `compute-staged-hash.sh` 整支
     消失。沒做的理由：那會改變 marker 格式，而這次的硬性限制是對進行中 session 的舊 state
     雙向相容。要做的話得單獨一輪、配合 cache 同步。
-  - **「每個步驟各自負責哪些檔案」缺一等公民**：drift 的排除清單與「缺口 3（文件變動讓
-    review／tests 過期）」是同一個缺概念的兩面。做出 per-step scope 可以一次關掉兩者，但
+  - **「每個步驟各自負責哪些檔案」缺一等公民**：drift 的排除清單與「文件變動讓 review／tests
+    的章過期」是同一個缺概念的兩面。做出 per-step scope 可以一次關掉兩者，但
     **它不會取代 round**——review 之後的修正本身就是程式碼，死結還在。
 - **C — 兩支測試腳本的共用樣板**（`mkrepo`／`pass`／`fail`／`gate_run` 各寫兩份）可以抽成
   `tests/lib.sh`；`scripts/read-marker.sh` 全 repo 零引用，是既有死碼，一併處理。
+- **D — 不存在的 gate 名稱會放行**（2026-09-23 移除 /ship gate 時的 review 提出）：
+  `pipeline_enforce <不存在的 gate>` 在 guard 的 `set -euo pipefail` 下，bash 3.2 會因
+  `required[@]: unbound variable` 以 exit 1 結束（沒開 `set -u` 時則是 exit 0，當成「沒有要求的步驟」）；
+  PreToolUse hook 只有 exit 2 才擋，兩種都等於放行（重現：在有 staged 變更的 repo 裡跑
+  `bash -c 'set -euo pipefail; . scripts/pipeline-lib.sh; pipeline_enforce ship t'; echo $?` → 1）。目前沒有任何呼叫端會傳錯的名稱，
+  只有日後把 gate 名稱打錯時才會踩到。**回來做時**：`pipeline_eval_gate` 取到空的步驟清單就印
+  「unknown gate」並擋下，另補一個情境測試。
 - ~~**非-husky repo 的一鍵 installer**~~ —— **2026-07-29 完成**，見 `scripts/install-git-hook.sh`（上方「強制是 git-native 的」一節）。
   - 當初記的兩條路裡，「由 installer **設定** `core.hooksPath`」沒有採用：那是整個 hooks 目錄的替換而非疊加，會讓 repo 既有的 `.git/hooks/` 全部失效。改用塞 stub。但**讀取**既有的 `core.hooksPath` 是必要的——repo 自己設了的話，git 只從那裡找 hook。

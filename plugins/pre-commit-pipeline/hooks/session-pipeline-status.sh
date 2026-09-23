@@ -47,14 +47,13 @@ if [ ! -f "$STATE_FILE" ]; then
   cat <<EOF
 [pre-commit-pipeline] uncommitted changes detected, no pipeline markers yet.
   next commit will require: /simplify, /review, /verify-tests
-  (and /document-release before /ship)
 EOF
   exit 0
 fi
 
 # 有 marker 檔 → 算最新 marker 時間
 LATEST_EPOCH=0
-for step in simplify review tests document_release; do
+for step in simplify review tests; do
   TS=$(jq -r --arg s "$step" '.[$s].done_at // .[$s].verified_at // empty' "$STATE_FILE" 2>/dev/null || true)
   if [ -n "$TS" ]; then
     EPOCH=$(date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$TS" +%s 2>/dev/null || echo 0)

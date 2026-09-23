@@ -1,12 +1,11 @@
 {
   "_comment": "Single source of truth for pipeline gate steps. All guards + pipeline-mark-done.sh read this via pipeline-lib.sh. To add/remove a required gate step, edit ONLY this file.",
   "_comment_order": "The gates arrays ARE the step order: a step's position decides who is downstream of it. Only a step with a later content-bound step in the same gate can be bound to the round instead of the content.",
-  "_comment_binding": "content (default, applies to anything not listed) = the marker's staged_hash must equal the current staged hash. round = the marker also counts when it was written in the SAME round (same HEAD, within 24h, has staged_tree, drift under round_drift) and some LATER content-bound step vouches for the final content. simplify is round-bound because review sits after it and does look at the final content; document_release / tidy_docs are last in gates.ship, so nobody is downstream of them and they stay content-bound.",
+  "_comment_binding": "content (default, applies to anything not listed) = the marker's staged_hash must equal the current staged hash. round = the marker also counts when it was written in the SAME round (same HEAD, within 24h, has staged_tree, drift under round_drift) and some LATER content-bound step vouches for the final content. simplify is round-bound because review sits after it and does look at the final content; a step placed last in a gate has nobody downstream of it and stays content-bound.",
   "_comment_drift": "round_drift caps how much content a round-bound step never saw: added lines between its staged_tree and the current staged content. limit = min(max(floor_lines, ratio_percent% of the staged diff), max_lines). Calibrated 2026-09-20 on real sessions: observed review-phase edits had a median of ~29 lines and a p90 of ~136, and the one 390-line case is exactly what should force a simplify re-run.",
   "_comment_exclude": "exclude_paths are git pathspecs left out of both drift numbers, for files a house rule says to update in the same commit as the code (the TODO ledger, the verification docs) — counting them would let the ledger itself force a simplify re-run. Keep it narrow: a blanket *.md was the first version and it blinded the gate to repos whose product IS markdown (this one: SKILL.md, plugin READMEs).",
   "gates": {
-    "commit": ["simplify", "review", "tests"],
-    "ship": ["simplify", "review", "tests", "document_release", "tidy_docs"]
+    "commit": ["simplify", "review", "tests"]
   },
   "aliases": {
     "simplify": "simplify",
@@ -21,9 +20,7 @@
   "help": {
     "simplify": "/simplify, then: {MARK} simplify",
     "review": "/review, then:   {MARK} review",
-    "tests": "/verify-tests (writes its own marker)",
-    "document_release": "/document-release, then: {MARK} document-release",
-    "tidy_docs": "/tidy-docs, then: {MARK} tidy-docs"
+    "tests": "/verify-tests (writes its own marker)"
   },
   "binding": {
     "simplify": "round"
@@ -34,9 +31,9 @@
     "max_lines": 200,
     "exclude_paths": ["docs/*.md", "TODOS.md", "tasks/todo.md", "CHANGELOG.md"]
   },
-  "_comment_evidence_gates": "Which gates run pipeline_check_evidence. commit only, matching what the guards did before they shared one entry point — /ship never ran it, and switching that on as a side effect of a refactor would be an unrequested tightening. Listed here rather than defaulted in the shell: a list that lives only in code is exactly what the exclude_paths fallback got wrong. An unreadable or non-array value runs the check (strict), so a broken config cannot quietly widen the gate.",
+  "_comment_evidence_gates": "Which gates run pipeline_check_evidence. commit is the only gate today (why /ship has none: README §為什麼拿掉 /ship gate). Listed here rather than defaulted in the shell: a list that lives only in code is exactly what the exclude_paths fallback got wrong. An unreadable or non-array value runs the check (strict), so a broken config cannot quietly widen the gate.",
   "evidence_gates": ["commit"],
-  "_comment_docs_only": "Every staged path in `paths` and none in `instruction_paths` (for a gate listed in `gates`) → the commit gate is skipped entirely, no markers needed, AND the evidence hard-check is skipped with it (otherwise `fix(docs): typo` would still demand a regression test). An empty staged diff is never exempt. Separate from round_drift.exclude_paths, which only asks whether lines count toward drift. Full rationale — why not the old `^docs/` prefix, why instruction markdown is code, why instruction_paths uses :(glob,icase) (one pattern covers top-level AND nested; icase because macOS treats Claude.md and CLAUDE.md as the same file while git pathspec does not), why /ship stays strict — in README §純文件免審.",
+  "_comment_docs_only": "Every staged path in `paths` and none in `instruction_paths` (for a gate listed in `gates`) → the commit gate is skipped entirely, no markers needed, AND the evidence hard-check is skipped with it (otherwise `fix(docs): typo` would still demand a regression test). An empty staged diff is never exempt. Separate from round_drift.exclude_paths, which only asks whether lines count toward drift. Full rationale — why not the old `^docs/` prefix, why instruction markdown is code, why instruction_paths uses :(glob,icase) (one pattern covers top-level AND nested; icase because macOS treats Claude.md and CLAUDE.md as the same file while git pathspec does not) — in README §純文件免審.",
   "docs_only": {
     "gates": ["commit"],
     "paths": ["*.md", "*.png", "*.jpg", "*.jpeg", "*.gif", "*.svg", "*.pdf"],
