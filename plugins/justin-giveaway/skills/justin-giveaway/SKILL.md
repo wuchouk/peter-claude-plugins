@@ -255,4 +255,4 @@ storageState cookies 的有效期：
 ```bash
 TZ=America/Los_Angeles date
 ```
-JUSTIN 是 SF 作者，發片時間以 SF 為準，48 小時 window 也以 SF 為準。
+JUSTIN 是 SF 作者，發片時間以 SF 為準。

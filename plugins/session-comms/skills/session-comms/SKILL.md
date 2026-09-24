@@ -14,7 +14,7 @@ description: >
 
   Do NOT trigger for: 單一 session 開發（沒有其他 session 在跑時不需要）、
   跟真人聊天、跟 subagent 通訊（subagent 是 in-process，不需要這套協議）。
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Monitor, TaskStop
 ---
 
 # Session Coordination Protocol — 多 Session 溝通協議
@@ -137,13 +137,13 @@ touch "$GIT_ROOT/tasks/.comms/<session-name>.heartbeat"
 
 **前置條件：** 必須在 §2.6 建立 inbox 檔案**之後**才能跑，不然 watcher 啟動時會找不到 inbox 直接 exit。
 
-用 `Bash run_in_background=true` 啟動 watcher：
+用 Monitor tool 直接跑 watcher（`command` 就是下面這行，`timeout_ms` 設 1800000）：
 
 ```bash
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/watch-inbox.sh" <session-name> 3
 ```
 
-記住回傳的 shell ID。然後用 Monitor tool 監聽它的 stdout。每次看到 `INBOX_CHANGED` 就觸發 §4 讀 inbox 流程。
+記住回傳的 task ID（存成 `watcher_shell_id`）。每則 `INBOX_CHANGED` 通知就觸發 §4 讀 inbox 流程。Monitor 最長 30 分鐘會到期，收到到期通知時溝通模式還開著就重新 arm。
 
 > 注意：Monitor 整合是**建議**但非必要。就算沒啟動 Monitor，pre/post long-tool peek（§7）仍然會把訊息撿回來，只是延遲稍長。如果 watcher 啟動失敗，告訴 Peter 「Monitor watcher 啟動失敗，會改用 pure peek 模式，訊息可能延遲到下次長 tool 結束才讀到」，然後繼續。
 
@@ -370,13 +370,7 @@ Inbox 格式：每個訊息是一個 `<!-- MSG ... -->` 到 `<!-- END id:... -->
 
 ### 5.2 停止 watcher
 
-如果 `watcher_shell_id` 不是 null，kill 它：
-
-```bash
-kill <watcher_shell_id>
-```
-
-（或透過 Claude Code 的 background shell kill 機制，如果有的話。）
+如果 `watcher_shell_id` 不是 null，用 TaskStop 停掉它（`task_id` = `watcher_shell_id`）。這個 ID 不是 PID，不能用 `kill`。
 
 ### 5.3 從 registry 刪除自己
 

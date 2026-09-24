@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # pipeline-mark-done.sh — Claude 跑完 skill 後手動呼叫，寫 marker
 # Usage: pipeline-mark-done.sh <step>
-# Step: simplify | review | verify-tests | document-release
+# Step: simplify | review | verify-tests | document-release | tidy-docs
 set -euo pipefail
 
 STEP="${1:-}"
 if [ -z "$STEP" ]; then
   cat >&2 <<EOF
 Usage: pipeline-mark-done.sh <step>
-  step: simplify | review | verify-tests | document-release
+  step: simplify | review | verify-tests | document-release | tidy-docs
        regression --test "<test path / case>" | --skip "<reason>"
          (fix commits: writes .tests.regression.test / .skip_reason, the
           fields the fix-without-regression gate reads)

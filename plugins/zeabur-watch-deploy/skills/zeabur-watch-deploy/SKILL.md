@@ -1,6 +1,6 @@
 ---
 name: zeabur-watch-deploy
-description: Poll the latest Zeabur deployment for a service and report success or extract build log error snippets on failure. Use immediately after a git push / /ship to a Zeabur-deployed project (currently email-processor), or when the user asks "部署成功了嗎", "線上活的嗎", "check the deploy", "deploy 完了沒". Replaces the retired zeabur-mcp watch_latest tool.
+description: Poll the latest Zeabur deployment for a service and report success or extract build log error snippets on failure. Use right after a git push / /ship to a project whose service is listed in ~/.config/zeabur/services.json, or when the user asks "部署成功了嗎", "線上活的嗎", "check the deploy", "deploy 完了沒".
 ---
 
 # Zeabur Deploy Watcher
@@ -54,7 +54,7 @@ For anything beyond watching the latest deployment, use the **official `zeabur@z
 | Check runtime performance | `zeabur-service-metric` |
 | Exec into container (one-off DB queries) | `zeabur-service-exec` |
 
-Full list: 23 skills. This watcher covers **only** the push-then-poll case.
+The official plugin has more skills than this table lists. This watcher covers **only** the push-then-poll case.
 
 ## Adding a new Zeabur service
 

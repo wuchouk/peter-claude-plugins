@@ -37,11 +37,7 @@ MSG_ID=$(echo "$RESP" | python3 -c "import sys,json; print(json.loads(sys.stdin.
 
 ## chat_id 取得方式
 
-skill 第一次啟動時呼叫一次 telegram 的 status / configure 取得 Peter 的 chat_id，cache 在 working memory 裡。**不要寫死在 SKILL.md**（每個 user 不同）。
-
-或：等 Peter 主動丟一個 `/justin start` 之類的 trigger 訊息到 bot，從那則訊息抽 `chat_id`。
-
-> 簡化方案：第一次跑時讓 Peter 提供 chat_id，存到 `~/Library/Logs/justin-giveaway/state.json` 的 `telegram_chat_id` 欄位。
+Peter 的 chat_id 是 `1780314667`（下方範例指令用的就是它）。Scheduled mode 沒有載入 telegram plugin，不要嘗試用 plugin 的 status / configure 去查。
 
 ## 訊息模板
 
@@ -53,10 +49,10 @@ skill 第一次啟動時呼叫一次 telegram 的 status / configure 取得 Pete
 影片偵測中...
 ```
 
-### #2 沒新影片 / 非 giveaway
+### #2 已處理過 / 非 giveaway
 
 ```
-ℹ️ 本週無新影片（最新影片發佈於 {hours}h 前，超過 48h window）
+ℹ️ 最新影片『{title}』上次已處理過，跳過避免重複
 ✅ 流程結束
 ```
 
@@ -128,7 +124,7 @@ Log：~/Library/Logs/justin-giveaway/{filename}.log
 # 視當下進度附上 comment-*.png / x-share-*.png / /tmp/justin-form-debug.png / /tmp/justin-form-filled.png
 ```
 
-## Polling 邏輯（等 reply）— 2026-04-20 已換成純 curl 架構
+## Polling 邏輯（等 reply）
 
 **Scheduled mode 下完全不靠 plugin**。`run-justin.sh` 啟動 `claude -p` 時已經用 `--strict-mcp-config --mcp-config mcp-empty.json` 關掉所有 MCP server，所以 grammy plugin 根本不在這個 session 裡 poll，不會跟 `wait-reply.sh` 搶 `getUpdates`。
 
@@ -152,30 +148,3 @@ if [[ "${REPLY,,}" == "yes" ]] || [[ "${REPLY,,}" == "y" ]]; then
   ...
 fi
 ```
-
-`wait-reply.sh` 的 race condition（之前跟 grammy plugin 搶 getUpdates）在這個架構下**完全解決**，因為 scheduled session 裡根本沒 plugin 在 poll。
-
-**互動模式（舊 polling 邏輯僅供參考）：**
-
-```python
-# 舊偽碼（只適用 interactive mode，不再適用 scheduled）
-def wait_for_telegram_reply(chat_id, timeout_seconds=300):
-    start = time.time()
-    while time.time() - start < timeout_seconds:
-        # 互動模式下 plugin 把 inbound 訊息送進 conversation（<channel> tag）
-        # 下一輪 turn 會看到 Peter 的 reply
-        time.sleep(5)
-        # 檢查 conversation 是否有來自 chat_id 的新 inbound message
-        ...
-    return None  # timeout
-```
-
-> ⚠️ Telegram plugin 的 API 是「user → bot」單向 inbound，bot 收到訊息會透過 system reminder 進到 conversation。Skill 要等 reply 的方式：發訊息後**結束 turn 等待 user input**，等 user 在 Telegram 回覆後再繼續下一個 turn。
->
-> 這代表 scheduled mode 下 `claude -p` 不能完成單一 prompt 包整個流程 —— 要分多個 turn。實作 alternative：
-> - **A. 拆 stage**：每個 commit 點是一次 `claude -p` 呼叫，state 存 `state.json`，由外層 `run-justin.sh` 串起來
-> - **B. 同 prompt 內 sleep + poll**：用 `Bash` 讀 telegram updates API（curl），需要 bot token + offset
->
-> 推薦 B：在 SKILL.md 的 polling 步驟用 `Bash(curl)` 讀 `https://api.telegram.org/bot{TOKEN}/getUpdates?offset={last_id}`，每 5 秒 poll 一次直到 timeout。
->
-> 此細節 v0.1.0 先用方案 B 預留，第一次實測時驗證可行性。

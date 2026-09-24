@@ -13,7 +13,6 @@
 
 ### Hooks（自動化）
 - **PreToolUse (Skill)** — 自動記錄每次 skill 呼叫到 `usage.log`
-- **Stop** — 偵測使用者修正模式，建議執行 `/gotcha`
 
 ## 資料位置
 

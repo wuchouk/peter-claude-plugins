@@ -2,7 +2,7 @@
 # track-skill-usage.sh — PreToolUse (Skill) hook
 # 記錄每次 skill 被呼叫的時間、名稱、專案目錄
 # 輸入：stdin 接收 hook payload (JSON)
-# 輸出：stdout 輸出 {"decision":"approve"} (永遠放行)
+# 輸出：無（exit 0 = 不介入，交回一般權限流程）
 
 set -euo pipefail
 
@@ -21,6 +21,3 @@ PROJECT_DIR=$(pwd)
 
 # 追加到 usage log
 echo -e "${TIMESTAMP}\t${SKILL_NAME}\t${PROJECT_DIR}" >> "$USAGE_LOG"
-
-# 永遠放行
-echo '{"decision":"approve"}'

@@ -1,5 +1,5 @@
 ---
-description: "檢查所有 skill + plugin 安裝健康度。觸發詞：skill-health、skill 健康檢查、檢查 skill 安裝、plugin health、plugin 檢查、install verify、audit skills"
+description: "檢查所有 skill + plugin 安裝健康度。觸發詞：skill-health、skill 健康檢查、檢查 skill 安裝、plugin health、plugin 檢查、install verify。只查安裝完整性（SKILL.md 存在、frontmatter、cache 對齊）；內容過時、重複 skill 的整理用 skill-hygiene skill"
 allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/skill-health.sh:*)
 ---
 

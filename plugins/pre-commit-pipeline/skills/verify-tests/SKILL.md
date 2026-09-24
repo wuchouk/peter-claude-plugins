@@ -6,7 +6,7 @@ description: >
   (1) 使用者輸入 /verify-tests；
   (2) pre-commit-guard hook 失敗訊息指出 tests marker 缺失/過期；
   (3) Claude 完成 code 改動準備 commit 前，主動跑一次確保測試覆蓋。
-  Do NOT trigger for: 純文件 commit (.md only) 且使用者已說「不用測試」、純 config 改動且無 logic 影響。
+  Do NOT trigger for: gate 已豁免的純文件 commit（staged 全是 docs、沒有 SKILL.md／commands／agents／hooks 這類指令檔）、純 config 改動且無 logic 影響。指令類 markdown 仍要 tests marker。
 allowed-tools: Bash, Read, Glob, Grep
 ---
 
@@ -154,6 +154,7 @@ Decisions array 範例：
    這條**沒有 skip**：回報的路徑做不成測試就回去跟使用者說，不要 commit。
 5. commit 訊息將以 `fix` 開頭（conventional commit）→ marker 必須含 `regression`：
    `{"test": "<新增/更新的 regression test 路徑>"}` 或 `{"skip_reason": "<為何無法自動化>"}`。
+   用 CLI 寫，不要手改 JSON：`bash ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-mark-done.sh regression --test "<路徑>"`（或 `--skip "<原因>"`）。
 
 Marker payload 範例（在既有欄位之外新增）：
 
@@ -174,13 +175,13 @@ Marker payload 範例（在既有欄位之外新增）：
 
 ## Step 7 — 回報
 
-跟使用者確認 marker 寫好，告訴他下個 commit 應該不會被 hook 擋（除非 staged diff 又變了）。
+跟使用者確認 tests marker 寫好。commit gate 另外還要 simplify、review 的 marker（清單以 `pipeline-steps.json` 的 `gates.commit` 為準），而且 staged diff 之後再變就要重蓋——回報時照實說還缺哪些，不要說「下個 commit 不會被擋」。
 
 ---
 
 ## 重要原則
 
 - **不自動 commit**——這個 skill 只做測試決策，commit 由 hook 守門 + 使用者決定
-- **不主動修 bug**——測試 fail 只回報，由使用者決定要不要修
+- **這個 skill 只決策、不修**——測試 fail 就把結果寫進 `decisions[].status` 並回報；要不要修、怎麼修由呼叫端照專案規則處理，不在這個 skill 裡做
 - **判斷理由要透明**——每個決策都附 reason，讓 marker 可以被審視
 - **找不到 test file 時主動提**——missing coverage 比 false-pass 還危險

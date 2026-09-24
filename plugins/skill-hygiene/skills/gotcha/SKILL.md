@@ -1,8 +1,9 @@
 ---
 description: >
-  記錄 skill 的 gotcha（踩過的坑、注意事項、修正建議）。當使用者發現 skill 行為不符預期、
-  產出有誤、或流程有改進空間時觸發。觸發詞：gotcha、踩坑、不對、錯了、skill 問題、
-  記個 gotcha、這個 skill 應該、下次記得。
+  記錄 skill 的 gotcha（踩過的坑、注意事項、修正建議）。當使用者指出某個 skill 的行為、
+  產出或流程有問題，並想把它記下來讓 skill 改進時使用（例：gotcha、記個 gotcha、踩坑、
+  這個 skill 應該…、skill 問題）。一般的「不對／錯了」修正對話不算，除非對象是 skill 本身。
+allowed-tools: Read, Write, Edit, Glob, Grep, Bash(date:*), AskUserQuestion
 ---
 
 # /gotcha — 記錄 Skill Gotcha
