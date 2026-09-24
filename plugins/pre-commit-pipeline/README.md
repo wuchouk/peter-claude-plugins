@@ -427,5 +427,19 @@ cache 副本，而它在 git 之前就擋——不同步的話會變成 git 層�
     **它不會取代 round**——review 之後的修正本身就是程式碼，死結還在。
 - **C — 兩支測試腳本的共用樣板**（`mkrepo`／`pass`／`fail`／`gate_run` 各寫兩份）可以抽成
   `tests/lib.sh`；`scripts/read-marker.sh` 全 repo 零引用，是既有死碼，一併處理。
+- **D — 壞設定的測試只蓋到 PreToolUse 層**（2026-09-23 PR #4 審查提出）：情境 U 用截斷的
+  `pipeline-steps.json` 驗了 lib 與 `hooks/pre-commit-guard.sh`（exit 2），但 git 層的
+  `hooks/git-commit-msg-guard.sh` 遇到同樣的壞設定要以非 0（exit 1）結束、擋下 commit，這條沒有測試；
+  「設定檔無讀取權限」（`chmod 000`）這種讀不到的形式兩層都沒測。**回來做時**：在 U 裡對
+  git-native guard 補一筆截斷設定、兩層各補一筆 `chmod 000`（測完要 `chmod` 回來，否則暫存目錄清不掉）。
+- **E — `promote-plugin.sh` 不支援「PR 已經 squash merge」**（2026-09-23 PR #4 上線時遇到）：
+  第 1 步把 worktree 分支 `merge --ff-only` 進主 checkout，但 squash merge 之後 main 已經有等價內容、
+  分支的 commit 卻永遠不會是 main 的祖先，第 1 步必定以「無法 fast-forward」中止；錯誤訊息說
+  「完成後重跑會偵測到已經併好」，在 squash 的情況下重跑也一樣卡住。當次改成手動只做第 2 步
+  （`rsync -a --delete --exclude='.in_use/'` 主 checkout → cache）。**回來做時**：偵測「分支內容
+  已在 main」（例如 `git diff main <branch> -- $REL` 為空）就跳過第 1 步、直接從主 checkout 同步。
+  順帶：正向同步（第 106 行）已排除 `.in_use`，但失敗時的還原（`restore_cache`，第 99 行）是用
+  備份整份 `rsync --delete` 回寫，會把同步期間 Claude Code 新建或移除的 `.in_use` 標記換回備份時的狀態；
+  還原時也該 `--exclude='.in_use'`。
 - ~~**非-husky repo 的一鍵 installer**~~ —— **2026-07-29 完成**，見 `scripts/install-git-hook.sh`（上方「強制是 git-native 的」一節）。
   - 當初記的兩條路裡，「由 installer **設定** `core.hooksPath`」沒有採用：那是整個 hooks 目錄的替換而非疊加，會讓 repo 既有的 `.git/hooks/` 全部失效。改用塞 stub。但**讀取**既有的 `core.hooksPath` 是必要的——repo 自己設了的話，git 只從那裡找 hook。
