@@ -361,6 +361,7 @@ bash <這個外掛>/test-post-restart.sh          # hook 端點 + mark-done 寫�
 | T3 | `instruction_paths` 裡有非字串 | 不豁免（不採信半份清單） |
 | T4–T5 | `Claude.md` 大小寫變體／`.cursor/rules`、`prompts/`、`.github/instructions` | 都算指令類 |
 | R | `hooks/` 直接呼叫 `pipeline_eval_gate`／`pipeline_check_evidence` | 變紅（不得繞過單一入口） |
+| U | 不存在的 gate 名稱／`gates.commit` 是空陣列／`pipeline-steps.json` 讀不到（有／沒有 `set -u`，外加真的 PreToolUse hook） | 擋下並說明原因，hook 以 exit 2 結束（修正前三種都會放行） |
 | K | 三個章同秒連打 | 放行（5 秒規則已移除） |
 | L | `staged_tree` 指向已不存在的物件 | 擋下（算不出變動量就退回嚴格，不 fail open） |
 
@@ -426,12 +427,5 @@ cache 副本，而它在 git 之前就擋——不同步的話會變成 git 層�
     **它不會取代 round**——review 之後的修正本身就是程式碼，死結還在。
 - **C — 兩支測試腳本的共用樣板**（`mkrepo`／`pass`／`fail`／`gate_run` 各寫兩份）可以抽成
   `tests/lib.sh`；`scripts/read-marker.sh` 全 repo 零引用，是既有死碼，一併處理。
-- **D — 不存在的 gate 名稱會放行**（2026-09-23 移除 /ship gate 時的 review 提出）：
-  `pipeline_enforce <不存在的 gate>` 在 guard 的 `set -euo pipefail` 下，bash 3.2 會因
-  `required[@]: unbound variable` 以 exit 1 結束（沒開 `set -u` 時則是 exit 0，當成「沒有要求的步驟」）；
-  PreToolUse hook 只有 exit 2 才擋，兩種都等於放行（重現：在有 staged 變更的 repo 裡跑
-  `bash -c 'set -euo pipefail; . scripts/pipeline-lib.sh; pipeline_enforce ship t'; echo $?` → 1）。目前沒有任何呼叫端會傳錯的名稱，
-  只有日後把 gate 名稱打錯時才會踩到。**回來做時**：`pipeline_eval_gate` 取到空的步驟清單就印
-  「unknown gate」並擋下，另補一個情境測試。
 - ~~**非-husky repo 的一鍵 installer**~~ —— **2026-07-29 完成**，見 `scripts/install-git-hook.sh`（上方「強制是 git-native 的」一節）。
   - 當初記的兩條路裡，「由 installer **設定** `core.hooksPath`」沒有採用：那是整個 hooks 目錄的替換而非疊加，會讓 repo 既有的 `.git/hooks/` 全部失效。改用塞 stub。但**讀取**既有的 `core.hooksPath` 是必要的——repo 自己設了的話，git 只從那裡找 hook。

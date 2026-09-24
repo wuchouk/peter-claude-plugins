@@ -555,6 +555,39 @@ BAD=$(grep -l -E 'pipeline_eval_gate|pipeline_check_evidence' "$PLUGIN"/hooks/*.
 [ -z "$BAD" ] && pass "hooks/ 只透過 pipeline_enforce 執法" \
   || fail "這些 guard 繞過了單一入口：$(echo "$BAD" | tr '\n' ' ')"
 
+echo ""
+echo "=== U) 不存在的 gate／讀不到的設定 → 擋下（fail-closed）==="
+# 章齊全、內容相符，只有 gate 名稱或設定檔是壞的。修正前：guard 的 set -u 之下 bash 3.2 會在空的
+# required 陣列上以 exit 1 結束（PreToolUse 只認 exit 2，等於放行），沒開 set -u 則直接 return 0。
+new_repo unknown-gate
+add_lines app.py 5 A
+for s in simplify review verify-tests; do bash "$MARK" "$s" >/dev/null; done
+jq '.gates.commit = []' "$PLUGIN/pipeline-steps.json" > steps-emptygate.json
+printf '{"gates": {"commit": ["simplify"' > steps-truncated.json
+enforce_run() {   # $1 = shell 選項, $2 = gate, $3 = steps json（空＝外掛本身那份）
+  U_OUT=$(PIPELINE_STEPS_JSON="${3:-$PLUGIN/pipeline-steps.json}" \
+    bash -c "$1 . '$PLUGIN/scripts/pipeline-lib.sh'; pipeline_enforce '$2' test" 2>&1) && U_RC=0 || U_RC=$?
+}
+for opts in "" "set -euo pipefail;"; do
+  tag="${opts:-無 set -u}"
+  enforce_run "$opts" commit
+  [ "$U_RC" = "0" ] && pass "U 前置條件：同一個入口走 commit 放行（$tag）" || fail "U 前置條件不成立（$tag）：$U_OUT"
+  enforce_run "$opts" ship
+  { [ "$U_RC" = "1" ] && printf '%s' "$U_OUT" | grep -q "unknown gate 'ship'"; } \
+    && pass "U 未知 gate 擋下並指名（$tag）" || fail "U 未知 gate 沒被擋（$tag，rc=$U_RC）：$U_OUT"
+  enforce_run "$opts" commit "$PWD/steps-emptygate.json"
+  { [ "$U_RC" = "1" ] && printf '%s' "$U_OUT" | grep -q "unknown gate 'commit'"; } \
+    && pass "U gates.commit 是空陣列 → 擋下（$tag）" || fail "U 空陣列沒被擋（$tag，rc=$U_RC）：$U_OUT"
+  enforce_run "$opts" commit "$PWD/steps-truncated.json"
+  { [ "$U_RC" = "1" ] && printf '%s' "$U_OUT" | grep -q "cannot read gate steps"; } \
+    && pass "U 設定檔壞掉 → 擋下且說是讀不到設定、不是 gate 打錯（$tag）" \
+    || fail "U 壞設定的處理不對（$tag，rc=$U_RC）：$U_OUT"
+done
+# 使用者看得到的症狀在 hook 層：PreToolUse 只有 exit 2 才擋。壞設定修正前是 exit 1（放行）。
+out=$(echo '{"tool_input":{"command":"git commit -m \"feat: x\""}}' \
+  | PIPELINE_STEPS_JSON="$PWD/steps-truncated.json" bash "$PLUGIN/hooks/pre-commit-guard.sh" 2>&1) && rc=0 || rc=$?
+[ "$rc" = "2" ] && pass "U PreToolUse 拿到壞設定 → exit 2 擋下" || fail "U PreToolUse 沒擋（rc=$rc）：$out"
+
 cd "$WORK" || exit 1
 echo ""
 if [ "$FAILED" -eq 0 ]; then
