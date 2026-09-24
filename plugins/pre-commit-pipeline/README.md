@@ -441,5 +441,10 @@ cache 副本，而它在 git 之前就擋——不同步的話會變成 git 層�
   順帶：正向同步（第 106 行）已排除 `.in_use`，但失敗時的還原（`restore_cache`，第 99 行）是用
   備份整份 `rsync --delete` 回寫，會把同步期間 Claude Code 新建或移除的 `.in_use` 標記換回備份時的狀態；
   還原時也該 `--exclude='.in_use'`。
+- **F — PreToolUse 解析 `cd ~/<repo> && …` 時不展開 `~`**（2026-09-23 在 `~/.agents` 提交時遇到）：
+  `hooks/pre-commit-guard.sh` 的目標 repo 解析只認開頭的 `cd <path>`，抓到的字串是字面的 `~/.agents`，
+  `[ -d "~/.agents" ]` 為假，於是退回 session cwd 的 repo 去判定——評估錯的 repo，staged hash 是空 diff、
+  章屬於別的 repo，提交被誤擋（改用 `git -C /abs/path ...` 可繞過）。**回來做時**：解析出的路徑
+  開頭是 `~/` 就換成 `$HOME/`，並在 gate-scenarios 補一個「session cwd 是 A、指令是 `cd ~/B && git commit`」的情境。
 - ~~**非-husky repo 的一鍵 installer**~~ —— **2026-07-29 完成**，見 `scripts/install-git-hook.sh`（上方「強制是 git-native 的」一節）。
   - 當初記的兩條路裡，「由 installer **設定** `core.hooksPath`」沒有採用：那是整個 hooks 目錄的替換而非疊加，會讓 repo 既有的 `.git/hooks/` 全部失效。改用塞 stub。但**讀取**既有的 `core.hooksPath` 是必要的——repo 自己設了的話，git 只從那裡找 hook。
