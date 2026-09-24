@@ -150,7 +150,7 @@
 
 ### 6.1 開啟溝通模式
 
-**觸發：** Peter 對 session 說「開啟溝通模式」/「connect to other sessions」/「session-comms」/ 呼叫 `/session-comms` command
+**觸發：** Peter 對 session 說「開啟溝通模式」/「connect to other sessions」/「session-comms」/ 呼叫 `/session-comms`
 
 **Claude 執行：**
 1. 確認當前在 git repo 內
@@ -273,8 +273,6 @@
 ├── DESIGN.md                           ← 這份文件
 ├── .claude-plugin/
 │   └── plugin.json
-├── commands/
-│   └── session-comms.md                ← /session-comms command（觸發溝通模式）
 ├── skills/
 │   └── session-comms/
 │       └── SKILL.md                    ← 完整協議文件，使用者說關鍵字時自動載入

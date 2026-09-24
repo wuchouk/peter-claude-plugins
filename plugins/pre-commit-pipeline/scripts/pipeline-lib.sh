@@ -626,8 +626,10 @@ for line in sys.stdin.read().splitlines():
       {
         echo ""
         echo "[$label] BLOCKED — fix commit without regression backfill:"
-        echo "  add a regression test for the bug (marker .tests.regression.test),"
-        echo "  or record why it cannot be automated (.tests.regression.skip_reason)."
+        echo "  add a regression test for the bug, then record it:"
+        echo "    bash $_PIPELINE_LIB_DIR/pipeline-mark-done.sh regression --test \"<test path>\""
+        echo "  or record why it cannot be automated:"
+        echo "    bash $_PIPELINE_LIB_DIR/pipeline-mark-done.sh regression --skip \"<reason>\""
       } >&2
       return 1
     fi

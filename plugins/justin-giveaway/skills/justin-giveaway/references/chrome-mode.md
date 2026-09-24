@@ -1,8 +1,6 @@
 # chrome-devtools 模式操作細節
 
-預設模式。用 Chrome DevTools Protocol（CDP）直接連本地 Chrome（localhost:9222），操控 Peter 已登入的真實 Chrome profile。所有 YouTube/X/Google 都已 cookie 認證。
-
-**優勢：** 純本地連線，`claude -p`（scheduled mode）也能用，不依賴 cloud relay。
+互動模式專用。用 Chrome DevTools Protocol（CDP）直接連本地 Chrome（localhost:9222），操控 Peter 已登入的真實 Chrome profile。所有 YouTube/X/Google 都已 cookie 認證。Scheduled / headless 模式不用這份（原因見 SKILL.md）。
 
 ## Browser 連線（自動）
 
@@ -99,7 +97,7 @@ chrome-devtools 用 **uid**（從 `take_snapshot` 的 a11y tree 取得）來定�
    ```
 5. `take_snapshot` 找 Comment/留言 按鈕的 uid → `click` uid
 6. 等 2 秒
-7. **截圖**：`take_screenshot` filePath="/tmp/justin-comment-{timestamp}.png"
+7. **截圖**：照 SKILL.md Step 4 的規則（置頂留言 + 自己的留言同在 viewport），`take_screenshot` filePath="/Users/cubie/Library/Logs/justin-giveaway/screenshots/comment-{timestamp}.png"（Step 6 的 fill-form.mjs 從這個目錄取檔；MCP 的 filePath 不展開 `~`，要給絕對路徑）
 
 ## Step 5: X 分享
 
@@ -107,7 +105,7 @@ chrome-devtools 用 **uid**（從 `take_snapshot` 的 a11y tree 取得）來定�
 2. `wait_for` text=["Post", "發佈"]（等 post 按鈕出現）
 3. `take_snapshot` 找 Post 按鈕的 uid → `click` uid
 4. 等 3 秒
-5. **截圖**：`take_screenshot` filePath="/tmp/justin-x-share-{timestamp}.png"
+5. **截圖**：`take_screenshot` filePath="/Users/cubie/Library/Logs/justin-giveaway/screenshots/x-share-{timestamp}.png"
 
 ## Step 6: Google Form 操作
 

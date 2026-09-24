@@ -1,5 +1,6 @@
 ---
 description: "快速記錄產品想法、點子、靈感、市場情報。觸發詞：idea、點子、想到、記一下、new idea、product idea、聽到一個、突然想到、這個可以做、筆記一下"
+allowed-tools: Read, Write, Edit, Glob, Grep
 ---
 
 # /idea — 快速記錄產品想法
@@ -69,7 +70,7 @@ description: "快速記錄產品想法、點子、靈感、市場情報。觸發
 2. 根據 idea 內容和現有文件，建議歸檔位置：
    - 長期願景、Phase 規劃、Role Map → `docs/vision-roadmap.md`
    - 客戶訪談、競品、定價、產業趨勢 → `docs/market-intelligence.md`
-   - 短期功能需求 → `TODO.md`
+   - 短期功能需求 → 專案的 TODO 帳本（repo 根目錄有 `TODOS.md` 就用它，否則 `tasks/todo.md`）
    - 不確定就留在 idea-inbox，下次 review 再分
 
 ### Step 7 — 升級判斷（Record vs Analyze）

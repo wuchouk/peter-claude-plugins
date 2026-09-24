@@ -27,7 +27,7 @@ description: "加密個資自動填表 — 偵測表單欄位、建立映射、�
 
 ## Multi-Entry Fields
 
-v2 schema 的 phones、emails、passports 是陣列，可能有多筆資料。
+phones、emails、passports 是陣列，可能有多筆資料。
 
 ### 建立映射時的選擇邏輯
 
@@ -44,7 +44,7 @@ v2 schema 的 phones、emails、passports 是陣列，可能有多筆資料。
 
 ### Full Name 合成
 
-v2 移除了 `full_name_zh`/`full_name_en`，改用 `keys`+`join` 合成：
+schema 沒有 full name 欄位，全名一律用 `keys`+`join` 合成：
 
 ```json
 {"selector": "#fullName", "keys": ["identity.first_name_en", "identity.last_name_en"], "join": " "}

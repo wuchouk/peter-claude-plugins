@@ -3,6 +3,7 @@
 # 靜默版：只在 dirty diff + stale/missing marker 時印一行提示
 # 乾淨 repo 或 marker 新 → 完全靜默
 set -euo pipefail
+PLUGIN_DIR="$(cd "$(dirname "$0")/.." && pwd)"   # 在 cd 到 repo 之前解析，相對路徑呼叫也找得到 lib
 
 # --- plugin cache drift 檢查 -------------------------------------------------
 # Claude 載入的是 cache 副本（CLAUDE_PLUGIN_ROOT），真本在 peter-claude-plugins。
@@ -21,7 +22,7 @@ if [ -n "$CACHE_ROOT" ] && [ -d "$SRC_ROOT" ] && [ "$CACHE_ROOT" != "$SRC_ROOT" 
       echo "$DRIFT" | sed 's/^/    /' | head -10
       echo "  修復：rsync -a --exclude='.git' --exclude='.in_use' \"$SRC_ROOT/\" \"$CACHE_ROOT/\""
       echo "  （或用 /plugin 重裝 pre-commit-pipeline）"
-    } >&2
+    }  # stdout：SessionStart 只把 stdout 加進 context，stderr 在 exit 0 時 agent 看不到
   fi
 fi
 # ----------------------------------------------------------------------------
@@ -42,18 +43,29 @@ fi
 STATE_FILE="$REPO_ROOT/.claude/pipeline-state.json"
 NOW_EPOCH=$(date +%s)
 
+# 步驟清單與指令名都從 pipeline-steps.json 讀（gates.commit + help 的第一個字），不在這裡寫死
+# shellcheck source=/dev/null
+. "$PLUGIN_DIR/scripts/pipeline-lib.sh"
+COMMIT_KEYS=$(pipeline_gate_steps commit 2>/dev/null | tr '\n' ' ' || true)
+COMMIT_CMDS=""
+for step in $COMMIT_KEYS; do
+  cmd=$(pipeline_step_help "$step" "" 2>/dev/null | awk '{sub(/,$/, "", $1); print $1}')
+  COMMIT_CMDS="${COMMIT_CMDS:+$COMMIT_CMDS, }${cmd:-/${step//_/-}}"
+done
+[ -n "$COMMIT_CMDS" ] || COMMIT_CMDS="(pipeline-steps.json 讀不到，見 README)"
+
 # 沒 marker 檔 → 提示需要跑哪些
 if [ ! -f "$STATE_FILE" ]; then
   cat <<EOF
 [pre-commit-pipeline] uncommitted changes detected, no pipeline markers yet.
-  next commit will require: /simplify, /review, /verify-tests
+  next commit will require: ${COMMIT_CMDS}
 EOF
   exit 0
 fi
 
 # 有 marker 檔 → 算最新 marker 時間
 LATEST_EPOCH=0
-for step in simplify review tests; do
+for step in $COMMIT_KEYS; do
   TS=$(jq -r --arg s "$step" '.[$s].done_at // .[$s].verified_at // empty' "$STATE_FILE" 2>/dev/null || true)
   if [ -n "$TS" ]; then
     EPOCH=$(date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$TS" +%s 2>/dev/null || echo 0)
@@ -65,7 +77,7 @@ done
 
 # 全沒 marker
 if [ "$LATEST_EPOCH" -eq 0 ]; then
-  echo "[pre-commit-pipeline] uncommitted changes, no markers yet — see README for pipeline."
+  echo "[pre-commit-pipeline] uncommitted changes, no markers yet — next commit will require: ${COMMIT_CMDS}"
   exit 0
 fi
 
@@ -73,6 +85,6 @@ AGE=$((NOW_EPOCH - LATEST_EPOCH))
 if [ "$AGE" -gt 86400 ]; then
   AGE_DAYS=$((AGE / 86400))
   echo "[pre-commit-pipeline] uncommitted changes, last pipeline run ${AGE_DAYS}d ago (stale)."
-  echo "  next commit will re-run: /simplify, /review, /verify-tests"
+  echo "  next commit will re-run: ${COMMIT_CMDS}"
 fi
 # marker 新 → 靜默（即使 dirty diff 也不亂講話）

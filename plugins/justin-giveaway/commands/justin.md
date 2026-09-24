@@ -32,8 +32,7 @@ allowed-tools: AskUserQuestion, Read, Write, Edit, Glob, Grep, Bash(date:*), Bas
 1. **互動模式**（chrome-devtools）：Chrome 已開啟（port 9222）、需點 Allow remote debugging
 2. **Scheduled/headless 模式**（Playwright）：`~/.claude/justin-storage-state.json` 存在（Google + X cookies）
 3. **Telegram 確認回路**：telegram plugin 已 configure，bot token 設定好
-4. **TradingView name**：sku772003
-5. **帳號**：YouTube = ororov888@gmail.com (Cubie @Cubie-p2z)、X = @diamondhanddie
+4. **帳號與 TradingView name**：見 SKILL.md「帳號資訊」（唯一來源）
 
 ## 截圖存放
 

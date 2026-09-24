@@ -38,8 +38,10 @@ allowed-tools: Read, Write, Edit, Glob, Grep
 ### Step 1 — 讀取專案狀態
 
 讀取以下檔案（如果存在的話）：
-1. `docs/engineering-plan.md` — 目前的 scope、features、acceptance criteria
-2. `tasks/todo.md` — 目前的任務狀態和優先級
+1. **Plan**：`docs/verification/config.yaml` 的 `ac_source` 指的檔案，沒設定就是 `docs/engineering-plan.md` — 目前的 scope、features、acceptance criteria
+2. **TODO 帳本**：repo 根目錄有 `TODOS.md` 就用它，否則 `tasks/todo.md`（被 gitignore 的那個不算）— 目前的任務狀態和優先級
+
+下文提到 `docs/engineering-plan.md` / `tasks/todo.md` 時，一律指這裡解析出來的 Plan / TODO 帳本。
 
 如果這兩個檔案都不存在，告訴使用者：「目前沒有 engineering plan 和 TODO，建議先跑 `/plan-eng-review` 建立，這樣 scope check 才有依據。」然後結束。
 
@@ -145,7 +147,7 @@ allowed-tools: Read, Write, Edit, Glob, Grep
 - 測試通過時：從「待測」移到「Completed」（加上日期）
 - P2 Backlog 不分狀態——被提升為 P0/P1 時才開始區分
 
-**這個區分很重要**：自動化測試工具（如 `/test-email-processor`）可以直接讀「待測」section 知道要測什麼，而不會把還在開發中的項目也拿去測。
+**這個區分很重要**：自動化測試流程可以直接讀「待測」section 知道要測什麼，而不會把還在開發中的項目也拿去測。
 
 ### 首次觸發的優先級整理
 
