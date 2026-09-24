@@ -45,9 +45,9 @@ gate_run() {
     && GATE_RC=0 || GATE_RC=$?
 }
 
-# 三條執法路徑各自的結果。純文件豁免住在 guard 裡（在 pipeline_eval_gate 之前），
-# 所以只用 gate_run 測不到它——三條都要各自驗，否則會出現「lib 對了但某條路徑沒接上」。
-guard_run() {   # $1 = pretooluse|gitnative|ship
+# 兩條執法路徑各自的結果。純文件豁免住在 guard 裡（在 pipeline_eval_gate 之前），
+# 所以只用 gate_run 測不到它——兩條都要各自驗，否則會出現「lib 對了但某條路徑沒接上」。
+guard_run() {   # $1 = pretooluse|gitnative
   local layer="$1"
   case "$layer" in
     pretooluse)
@@ -55,9 +55,6 @@ guard_run() {   # $1 = pretooluse|gitnative|ship
         | bash "$PLUGIN/hooks/pre-commit-guard.sh" 2>&1) && G_RC=0 || G_RC=$? ;;
     gitnative)
       G_OUT=$(bash "$PLUGIN/hooks/git-commit-msg-guard.sh" 2>&1) && G_RC=0 || G_RC=$? ;;
-    ship)
-      G_OUT=$(echo '{"tool_input":{"command":"/ship"}}' \
-        | bash "$PLUGIN/hooks/pre-ship-guard.sh" 2>&1) && G_RC=0 || G_RC=$? ;;
   esac
 }
 
@@ -187,16 +184,6 @@ add_lines app.py 3 B
 rc=$( ( . "$PLUGIN/scripts/pipeline-lib.sh"; PIPELINE_STEPS_JSON="$PWD/steps.json" pipeline_eval_gate commit test >/dev/null 2>&1 ); echo $? )
 [ "$rc" != "0" ] && pass "沒有後續 content 步驟時不放寬" || fail "沒人看過最終內容卻放行"
 
-echo ""
-echo "=== I) ship gate：document_release / tidy_docs 仍綁內容 ==="
-new_repo ship
-add_lines app.py 10 A
-for s in simplify review verify-tests document-release tidy-docs; do bash "$MARK" "$s" >/dev/null; done
-{ gate_run ship; [ "$GATE_RC" = "0" ]; } && pass "全部同內容 → ship 放行" || fail "ship 被擋：$(printf "%s" "$GATE_OUT" | head -5)"
-add_lines app.py 3 B
-for s in simplify review verify-tests; do bash "$MARK" "$s" >/dev/null; done
-{ gate_run ship; [ "$GATE_RC" != "0" ]; } && pass "document_release 過期 → ship 擋下" || fail "尾端文件步驟被放寬了"
-printf '%s' "$GATE_OUT" | grep -qE 'document.release' && pass "訊息指出 document-release" || fail "訊息沒提 document-release：$GATE_OUT"
 
 echo ""
 echo "=== J) round_drift 的排除路徑不計入變動量 ==="
@@ -367,8 +354,8 @@ bash "$PLUGIN/scripts/install-git-hook.sh" >/dev/null 2>&1
 stage_files docs/guide.md src/app.ts
 if git commit -qm "feat: 混程式碼" 2>/dev/null; then fail "Q6b 含程式碼卻 commit 成功"; else pass "Q6b 含程式碼的真實 commit 被擋"; fi
 
-# Q7 — 三條路徑行為一致（同一份純文件 staged diff）
-new_repo docsonly-3layers
+# Q7 — 兩條路徑行為一致（同一份純文件 staged diff）
+new_repo docsonly-layers
 stage_files docs/guide.md
 guard_run pretooluse; RC_PRE=$G_RC
 guard_run gitnative;  RC_GIT=$G_RC
@@ -391,20 +378,15 @@ stage_files docs/adr/0002-y.md docs/adr/img.png
 guard_run pretooluse
 [ "$G_RC" = "0" ] && pass "Q10 md 配惰性素材 → 放行" || fail "Q10 配圖破壞了豁免：$G_OUT"
 
-# Q11 — ship gate 不豁免（同一份 docs-only diff：commit 放行、ship 擋下）
-new_repo docsonly-ship
+# Q11 — docs_only.gates 是活的資料：同一份 docs-only diff，把 commit 從 gates 拿掉就不再豁免。
+#       沒有這一筆，lib 裡的 gate 比對刪掉測試也不會紅（「改資料就能改行為」變成空話）。
+new_repo docsonly-gates
 stage_files docs/guide.md
-guard_run pretooluse; RC_C=$G_RC
-guard_run ship;       RC_S=$G_RC
-{ [ "$RC_C" = "0" ] && [ "$RC_S" != "0" ]; } \
-  && pass "Q11 commit 豁免、ship 不豁免" || fail "Q11 ship 也被豁免了（commit=$RC_C ship=$RC_S）"
-# 證明 ship 的接線是活的：把 ship 加進 docs_only.gates 就會豁免。沒有這一筆，
-# pre-ship-guard 裡那行呼叫刪掉測試也不會紅（「改資料就能改行為」變成空話）。
-jq '.docs_only.gates = ["commit","ship"]' "$PLUGIN/pipeline-steps.json" > steps-shipexempt.json
-rc=$( ( . "$PLUGIN/scripts/pipeline-lib.sh"; PIPELINE_STEPS_JSON="$PWD/steps-shipexempt.json" \
-  pipeline_docs_only_exempt ship test >/dev/null 2>&1 ); echo $? )
-[ "$rc" = "0" ] && pass "Q11b docs_only.gates 加入 ship → ship 也豁免（接線是活的）" \
-  || fail "Q11b 改了 gates 卻沒生效（rc=$rc）"
+jq '.docs_only.gates = []' "$PLUGIN/pipeline-steps.json" > steps-nogates.json
+rc=$( ( . "$PLUGIN/scripts/pipeline-lib.sh"; PIPELINE_STEPS_JSON="$PWD/steps-nogates.json" \
+  pipeline_docs_only_exempt commit test >/dev/null 2>&1 ); echo $? )
+[ "$rc" != "0" ] && pass "Q11 docs_only.gates 不含 commit → 不豁免（接線是活的）" \
+  || fail "Q11 改了 gates 卻沒生效（rc=$rc）"
 
 # Q12 — 今天的真實案例 (a)：~/.agents 只改 AGENTS.md / AGENTS-reference.md / CHANGELOG.md
 #       AGENTS*.md 是 agent 規則本身，該審 → 擋
@@ -437,8 +419,8 @@ echo ""
 echo "=== S) evidence 硬檢查真的有跑（之前整份測試從沒讓它做事）==="
 # 整份 gate-scenarios 以前沒有任何情境寫過 .tests 的 evidence 欄位，於是
 # pipeline_check_evidence 一律在 `[ -f state ] || return 0` 早退。結果是「豁免要短路
-# evidence」這條最要緊的性質零覆蓋：把 evidence 搬到豁免之前、或讓 ship 也跑 evidence、
-# 或把 evidence_gates 改成空陣列，三種破壞測試都照樣全綠。
+# evidence」這條最要緊的性質零覆蓋：把 evidence 搬到豁免之前、或把 evidence_gates
+# 改成空陣列，破壞了測試都照樣全綠。
 break_evidence() {   # 讓 .tests 指向一個不存在的證據檔
   jq '.tests.evidence_required = ["render"] | .tests.evidence = {"render": "docs/nope.png"}' \
     .claude/pipeline-state.json > .claude/s.tmp && mv .claude/s.tmp .claude/pipeline-state.json
@@ -465,15 +447,13 @@ guard_run pretooluse
 { [ "$G_RC" != "0" ] && printf '%s' "$G_OUT" | grep -q "evidence"; } \
   && pass "S2 commit gate 會跑 evidence 並擋下壞證據" || fail "S2 evidence 沒跑（rc=$G_RC）：$G_OUT"
 
-# S3 — 同樣壞證據，但走 ship → 放行。鎖住既有行為：pre-ship-guard 從來不跑 evidence，
-#      改成單一入口時不能順手把它變嚴。
-new_repo evidence-ship
-add_lines app.py 5 A
-for s in simplify review verify-tests document-release tidy-docs; do bash "$MARK" "$s" >/dev/null; done
-break_evidence
-guard_run ship
-[ "$G_RC" = "0" ] && pass "S3 ship gate 不跑 evidence（與改動前一致）" \
-  || fail "S3 ship 變嚴了（rc=$G_RC）：$G_OUT"
+# S3 — 同一份壞證據，evidence_gates 不列 commit → 放行。證明 evidence_gates 是活的資料：
+#      原本靠 ship gate 走到「不跑 evidence」這條分支，/ship gate 移除後改用改資料的方式驗。
+jq '.evidence_gates = []' "$PLUGIN/pipeline-steps.json" > steps-noevidence.json
+rc=$( ( . "$PLUGIN/scripts/pipeline-lib.sh"; PIPELINE_STEPS_JSON="$PWD/steps-noevidence.json" \
+  pipeline_enforce commit test >/dev/null 2>&1 ); echo $? )
+[ "$rc" = "0" ] && pass "S3 evidence_gates 不含 commit → 不跑 evidence（接線是活的）" \
+  || fail "S3 改了 evidence_gates 卻沒生效（rc=$rc）"
 
 # S4 — 刪掉 exclude_paths 這個鍵 → 不得有硬編 fallback 頂替（上一輪那份 fallback
 #      在 JSON 收窄後沒跟上，是「兩份清單各自漂移」的實例）
@@ -574,6 +554,39 @@ echo "=== R) 結構不變式：guard 不得自己組合判定順序 ==="
 BAD=$(grep -l -E 'pipeline_eval_gate|pipeline_check_evidence' "$PLUGIN"/hooks/*.sh 2>/dev/null || true)
 [ -z "$BAD" ] && pass "hooks/ 只透過 pipeline_enforce 執法" \
   || fail "這些 guard 繞過了單一入口：$(echo "$BAD" | tr '\n' ' ')"
+
+echo ""
+echo "=== U) 不存在的 gate／讀不到的設定 → 擋下（fail-closed）==="
+# 章齊全、內容相符，只有 gate 名稱或設定檔是壞的。修正前：guard 的 set -u 之下 bash 3.2 會在空的
+# required 陣列上以 exit 1 結束（PreToolUse 只認 exit 2，等於放行），沒開 set -u 則直接 return 0。
+new_repo unknown-gate
+add_lines app.py 5 A
+for s in simplify review verify-tests; do bash "$MARK" "$s" >/dev/null; done
+jq '.gates.commit = []' "$PLUGIN/pipeline-steps.json" > steps-emptygate.json
+printf '{"gates": {"commit": ["simplify"' > steps-truncated.json
+enforce_run() {   # $1 = shell 選項, $2 = gate, $3 = steps json（空＝外掛本身那份）
+  U_OUT=$(PIPELINE_STEPS_JSON="${3:-$PLUGIN/pipeline-steps.json}" \
+    bash -c "$1 . '$PLUGIN/scripts/pipeline-lib.sh'; pipeline_enforce '$2' test" 2>&1) && U_RC=0 || U_RC=$?
+}
+for opts in "" "set -euo pipefail;"; do
+  tag="${opts:-無 set -u}"
+  enforce_run "$opts" commit
+  [ "$U_RC" = "0" ] && pass "U 前置條件：同一個入口走 commit 放行（$tag）" || fail "U 前置條件不成立（$tag）：$U_OUT"
+  enforce_run "$opts" ship
+  { [ "$U_RC" = "1" ] && printf '%s' "$U_OUT" | grep -q "unknown gate 'ship'"; } \
+    && pass "U 未知 gate 擋下並指名（$tag）" || fail "U 未知 gate 沒被擋（$tag，rc=$U_RC）：$U_OUT"
+  enforce_run "$opts" commit "$PWD/steps-emptygate.json"
+  { [ "$U_RC" = "1" ] && printf '%s' "$U_OUT" | grep -q "unknown gate 'commit'"; } \
+    && pass "U gates.commit 是空陣列 → 擋下（$tag）" || fail "U 空陣列沒被擋（$tag，rc=$U_RC）：$U_OUT"
+  enforce_run "$opts" commit "$PWD/steps-truncated.json"
+  { [ "$U_RC" = "1" ] && printf '%s' "$U_OUT" | grep -q "cannot read gate steps"; } \
+    && pass "U 設定檔壞掉 → 擋下且說是讀不到設定、不是 gate 打錯（$tag）" \
+    || fail "U 壞設定的處理不對（$tag，rc=$U_RC）：$U_OUT"
+done
+# 使用者看得到的症狀在 hook 層：PreToolUse 只有 exit 2 才擋。壞設定修正前是 exit 1（放行）。
+out=$(echo '{"tool_input":{"command":"git commit -m \"feat: x\""}}' \
+  | PIPELINE_STEPS_JSON="$PWD/steps-truncated.json" bash "$PLUGIN/hooks/pre-commit-guard.sh" 2>&1) && rc=0 || rc=$?
+[ "$rc" = "2" ] && pass "U PreToolUse 拿到壞設定 → exit 2 擋下" || fail "U PreToolUse 沒擋（rc=$rc）：$out"
 
 cd "$WORK" || exit 1
 echo ""

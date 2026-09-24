@@ -3,7 +3,7 @@
 # Source this from guards / mark-done so the step list lives in ONE place.
 #
 # Provides:
-#   pipeline_gate_steps <gate>        → space-separated canonical step keys for a gate (commit|ship)
+#   pipeline_gate_steps <gate>        → space-separated canonical step keys for a gate (commit)
 #   pipeline_resolve_alias <input>    → canonical step key for an alias, or "" if unknown
 #   pipeline_step_help <step> <mark>  → human help line ({MARK} replaced by <mark>), or "" if none
 #   pipeline_step_binding <step>      → "round" or "content" (default)
@@ -243,6 +243,8 @@ _pipeline_numstat_sum() {
 #   .claude/pipeline-state.json in the current repo. Prints a BLOCKED report to
 #   stderr and returns 1 when a marker is missing or no longer matches the
 #   staged content. A marker older than 24h is only a soft WARN, not a block.
+#   A gate pipeline-steps.json lists no steps for (a typo, or a config jq cannot
+#   read) also returns 1 — checked first, before the not-a-git-repo early exit.
 #
 #   Two ways a marker satisfies the gate, chosen per step by `binding` in
 #   pipeline-steps.json (content unless listed otherwise):
@@ -266,6 +268,26 @@ pipeline_eval_gate() {
   local gate="$1" label="${2:-pre-commit-pipeline}"
   _pipeline_require_json || return 1
 
+  # Both failures below block, never "nothing required". Before this check an
+  # empty step list fell through: bash 3.2 under `set -u` died on the empty
+  # "${required[@]}" further down with exit 1, which a PreToolUse hook treats as
+  # allow (only exit 2 blocks), and without `set -u` the gate returned 0.
+  # The steps are read into a variable first so a jq failure (truncated or
+  # unreadable JSON) is reported as that, not as a misspelled gate name.
+  local steps_out
+  if ! steps_out=$(pipeline_gate_steps "$gate"); then
+    echo "[$label] BLOCKED — cannot read gate steps from $PIPELINE_STEPS_JSON (see the jq error above)." >&2
+    return 1
+  fi
+  local -a required missing stale_hash stale_time drift_over round_expired
+  required=()
+  while IFS= read -r s; do [ -n "$s" ] && required+=("$s"); done <<< "$steps_out"
+  # ${#required[@]} itself is safe under `set -u` on bash 3.2.
+  if [ "${#required[@]}" -eq 0 ]; then
+    echo "[$label] BLOCKED — unknown gate '$gate': pipeline-steps.json lists no steps for it." >&2
+    return 1
+  fi
+
   local repo_root
   _pipeline_repo_root; repo_root="$_PIPELINE_REPO_ROOT"
   [ -z "$repo_root" ] && return 0  # not a git repo: let git itself decide
@@ -280,10 +302,6 @@ pipeline_eval_gate() {
   cur_head=$(cd "$repo_root" && git rev-parse --verify --quiet HEAD 2>/dev/null || echo "no-head")
   state_file="$repo_root/.claude/pipeline-state.json"
   mark_cmd="bash ~/peter-claude-plugins/plugins/pre-commit-pipeline/scripts/pipeline-mark-done.sh"
-
-  local -a required missing stale_hash stale_time drift_over round_expired
-  required=()
-  while IFS= read -r s; do [ -n "$s" ] && required+=("$s"); done < <(pipeline_gate_steps "$gate")
 
   local state="{}"
   [ -f "$state_file" ] && state=$(cat "$state_file")
