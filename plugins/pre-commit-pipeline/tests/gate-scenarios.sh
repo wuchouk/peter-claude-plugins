@@ -588,6 +588,29 @@ out=$(echo '{"tool_input":{"command":"git commit -m \"feat: x\""}}' \
   | PIPELINE_STEPS_JSON="$PWD/steps-truncated.json" bash "$PLUGIN/hooks/pre-commit-guard.sh" 2>&1) && rc=0 || rc=$?
 [ "$rc" = "2" ] && pass "U PreToolUse 拿到壞設定 → exit 2 擋下" || fail "U PreToolUse 沒擋（rc=$rc）：$out"
 
+echo ""
+echo "=== V) hook 行程的 cwd 不是工具實際的 cwd（worktree session，2026-09-30 兩個 PR 被誤擋）==="
+# 主 checkout：index 是空的。worktree：程式碼已 stage、三個章都蓋好。
+# hook 行程停在主 checkout，payload 的 cwd 才是 Bash 工具實際所在的 worktree。
+new_repo cwd-primary
+PRIMARY="$PWD"
+new_repo cwd-worktree
+WT="$PWD"
+add_lines app.py 5 A
+for s in simplify review verify-tests; do bash "$MARK" "$s" >/dev/null; done
+guard_from_primary() {   # $1 = payload JSON
+  ( cd "$PRIMARY" && printf '%s' "$1" | bash "$PLUGIN/hooks/pre-commit-guard.sh" 2>&1 )
+}
+out=$(guard_from_primary "{\"cwd\":\"$WT\",\"tool_input\":{\"command\":\"git commit -m \\\"feat: x\\\"\"}}") && rc=0 || rc=$?
+[ "$rc" = "0" ] && pass "V1 依 payload 的 cwd 判定 worktree → 放行" || fail "V1 仍評估了 hook 行程所在的 repo（rc=$rc）：$out"
+out=$( ( export HOME="$WORK"; guard_from_primary '{"tool_input":{"command":"cd ~/cwd-worktree && git commit -m \"feat: x\""}}' ) ) && rc=0 || rc=$?
+[ "$rc" = "0" ] && pass "V2 cd ~/<repo> 會展開 ~ → 放行" || fail "V2 ~ 沒展開（rc=$rc）：$out"
+# 反向：payload cwd 指向沒蓋章的 repo，一樣要擋（不能因為換了判定位置就放行）
+cd "$WT" && git reset -q && echo "x" >> app.py && git add app.py
+rm -f .claude/pipeline-state.json
+out=$(guard_from_primary "{\"cwd\":\"$WT\",\"tool_input\":{\"command\":\"git commit -m \\\"feat: x\\\"\"}}") && rc=0 || rc=$?
+[ "$rc" = "2" ] && pass "V3 payload cwd 的 repo 沒蓋章 → 擋下" || fail "V3 沒蓋章卻放行（rc=$rc）：$out"
+
 cd "$WORK" || exit 1
 echo ""
 if [ "$FAILED" -eq 0 ]; then
