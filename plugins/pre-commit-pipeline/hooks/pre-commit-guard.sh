@@ -48,9 +48,20 @@ fi
 # session cwd's repo instead gated the WRONG repo (observed: a commit into a
 # plugin repo blocked by the home directory repo's stale pipeline state).
 # Only a leading `cd <path> &&`/`;` prefix is parsed — anything fancier falls
-# back to cwd, which is the pre-existing behaviour.
+# back to the tool's cwd.
+#
+# That fallback is the payload's `cwd` (where the Bash tool actually runs), not
+# this hook process's own cwd. They differ in worktree sessions: the hook can
+# start in the primary checkout while the agent works in
+# `.claude/worktrees/<name>/`, so the primary checkout's empty index was gated
+# and every commit was blocked with the empty-diff hash e3b0c442….
+HOOK_CWD=$(echo "$PAYLOAD" | jq -r '.cwd // ""')
+if [ -n "$HOOK_CWD" ] && [ -d "$HOOK_CWD" ]; then
+  cd "$HOOK_CWD" || true
+fi
 TARGET_DIR=$(printf '%s' "$COMMAND" | sed -nE \
   's/^[[:space:]]*cd[[:space:]]+("([^"]*)"|'\''([^'\'']*)'\''|([^ ;&|]+))[[:space:]]*(&&|;).*/\2\3\4/p' | head -1)
+case "$TARGET_DIR" in "~") TARGET_DIR="$HOME" ;; "~/"*) TARGET_DIR="$HOME/${TARGET_DIR#"~/"}" ;; esac
 if [ -n "$TARGET_DIR" ] && [ -d "$TARGET_DIR" ]; then
   cd "$TARGET_DIR" || true
 fi
